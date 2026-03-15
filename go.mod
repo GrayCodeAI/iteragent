@@ -1,3 +1,3 @@
-module github.com/yourusername/iteragent
+module github.com/GrayCodeAI/iteragent
 
 go 1.22
