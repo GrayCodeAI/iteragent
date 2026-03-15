@@ -8,32 +8,26 @@ import (
 	"strings"
 )
 
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
+// ToolCall represents a tool invocation.
 type ToolCall struct {
 	Tool string            `json:"tool"`
 	Args map[string]string `json:"args"`
 }
 
+// Tool represents a capability the agent can invoke.
 type Tool struct {
 	Name        string
 	Description string
 	Execute     func(ctx context.Context, args map[string]string) (string, error)
 }
 
+// Event represents a step in the agent's reasoning.
 type Event struct {
 	Type    string
 	Content string
 }
 
-type Provider interface {
-	Complete(ctx context.Context, messages []Message) (string, error)
-	Name() string
-}
-
+// Agent is the core reasoning loop.
 type Agent struct {
 	provider Provider
 	tools    map[string]Tool
@@ -41,6 +35,7 @@ type Agent struct {
 	Events   chan Event
 }
 
+// New creates a new Agent.
 func New(p Provider, tools []Tool, logger *slog.Logger) *Agent {
 	toolMap := make(map[string]Tool, len(tools))
 	for _, t := range tools {
@@ -54,13 +49,19 @@ func New(p Provider, tools []Tool, logger *slog.Logger) *Agent {
 	}
 }
 
+// Run executes the agent loop with the given system prompt and user message.
 func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	allTools := make([]Tool, 0, len(a.tools))
+	for _, t := range a.tools {
+		allTools = append(allTools, t)
+	}
+
 	messages := []Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: systemPrompt + "\n\n" + ToolDescriptions(allTools)},
 		{Role: "user", Content: userMessage},
 	}
 
-	maxIterations := 20
+	const maxIterations = 20
 	for i := 0; i < maxIterations; i++ {
 		a.logger.Info("agent iteration", "step", i+1)
 
@@ -121,6 +122,7 @@ func (a *Agent) emit(e Event) {
 	}
 }
 
+// ParseToolCalls extracts tool calls from LLM output.
 func ParseToolCalls(output string) []ToolCall {
 	var calls []ToolCall
 	lines := strings.Split(output, "\n")
@@ -148,6 +150,7 @@ func ParseToolCalls(output string) []ToolCall {
 	return calls
 }
 
+// ToolMap converts a slice of tools to a name-indexed map.
 func ToolMap(tools []Tool) map[string]Tool {
 	m := make(map[string]Tool, len(tools))
 	for _, t := range tools {
@@ -156,6 +159,7 @@ func ToolMap(tools []Tool) map[string]Tool {
 	return m
 }
 
+// ToolDescriptions returns a formatted string of all tool descriptions.
 func ToolDescriptions(tools []Tool) string {
 	var sb strings.Builder
 	sb.WriteString("## Available tools\n\n")
