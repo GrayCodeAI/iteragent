@@ -1,3 +1,3 @@
-module github.com/GrayCodeAI/iterate-agent
+module github.com/GrayCodeAI/iteragent
 
 go 1.22
