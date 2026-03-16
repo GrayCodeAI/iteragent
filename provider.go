@@ -13,7 +13,7 @@ type Provider interface {
 }
 
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
-// Supported values: ollama, openai, anthropic, groq, gemini, nvidia (default: gemini)
+// Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode (default: gemini)
 // If apiKey is provided, it takes priority over environment variables.
 func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 	providedKey := ""
@@ -102,9 +102,23 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		if key == "" {
 			return nil, fmt.Errorf("NVIDIA_API_KEY is required for nvidia provider (or use --api-key)")
 		}
-		return NewNvidia(OpenAICompatConfig{
+		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: getEnvOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
 			Model:   getEnvOr("ITERATE_MODEL", "meta/llama-3.3-70b-instruct"),
+			APIKey:  key,
+		}), nil
+
+	case "opencode":
+		key := providedKey
+		if key == "" {
+			key = os.Getenv("OPENCODE_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("OPENCODE_API_KEY is required for opencode provider (or use --api-key)")
+		}
+		return NewOpenAICompat(OpenAICompatConfig{
+			BaseURL: "https://opencode.ai/zen/v1",
+			Model:   getEnvOr("ITERATE_MODEL", "opencode/nemotron-3-super-free"),
 			APIKey:  key,
 		}), nil
 
