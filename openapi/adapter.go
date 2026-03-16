@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	iteragent "github.com/GrayCodeAI/iteragent"
 )
 
 type Spec struct {
@@ -87,6 +85,10 @@ func LoadSpec(data []byte) (*Spec, error) {
 	return &spec, nil
 }
 
+func ParseSpec(data []byte) (*Spec, error) {
+	return LoadSpec(data)
+}
+
 func NewAdapter(spec *Spec, config Config) *Adapter {
 	baseURL := config.BaseURL
 	if baseURL == "" && len(spec.Servers) > 0 {
@@ -100,8 +102,14 @@ func NewAdapter(spec *Spec, config Config) *Adapter {
 	}
 }
 
-func (a *Adapter) GetTools() ([]iteragent.Tool, error) {
-	var tools []iteragent.Tool
+type Tool struct {
+	Name        string
+	Description string
+	Execute     func(ctx context.Context, args map[string]string) (string, error)
+}
+
+func (a *Adapter) GetTools() ([]Tool, error) {
+	var tools []Tool
 
 	for path, item := range a.spec.Paths {
 		for method, op := range map[string]*Operation{"get": item.Get, "post": item.Post, "put": item.Put, "delete": item.Delete} {
@@ -113,7 +121,7 @@ func (a *Adapter) GetTools() ([]iteragent.Tool, error) {
 			pathStr := path
 			methodStr := method
 
-			tool := iteragent.Tool{
+			tool := Tool{
 				Name:        fmt.Sprintf("%s_%s", methodStr, cleanPath(pathStr)),
 				Description: operation.Description,
 				Execute: func(ctx context.Context, args map[string]string) (string, error) {

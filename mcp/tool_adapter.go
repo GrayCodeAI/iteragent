@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	iteragent "github.com/GrayCodeAI/iteragent"
 )
+
+type ExecutableTool struct {
+	Name        string
+	Description string
+	Execute     func(ctx context.Context, args map[string]string) (string, error)
+}
 
 type ToolAdapter struct {
 	client *Client
@@ -16,16 +20,16 @@ func NewToolAdapter(client *Client) *ToolAdapter {
 	return &ToolAdapter{client: client}
 }
 
-func (a *ToolAdapter) GetTools(ctx context.Context) ([]iteragent.Tool, error) {
+func (a *ToolAdapter) GetTools(ctx context.Context) ([]ExecutableTool, error) {
 	mcpTools, err := a.client.ListTools(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tools := make([]iteragent.Tool, len(mcpTools))
+	tools := make([]ExecutableTool, len(mcpTools))
 	for i, t := range mcpTools {
 		mt := t
-		tools[i] = iteragent.Tool{
+		tools[i] = ExecutableTool{
 			Name:        mt.Name,
 			Description: mt.Description,
 			Execute: func(ctx context.Context, args map[string]string) (string, error) {

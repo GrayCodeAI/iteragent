@@ -260,6 +260,11 @@ func (a *Agent) GetTools() []Tool {
 	return tools
 }
 
+func (a *Agent) AddTool(tool Tool) *Agent {
+	a.tools[tool.Name] = tool
+	return a
+}
+
 func (a *Agent) Prompt(ctx context.Context, text string) chan Event {
 	events := make(chan Event, 64)
 	go func() {
