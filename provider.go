@@ -104,7 +104,7 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		}
 		return NewNvidia(OpenAICompatConfig{
 			BaseURL: getEnvOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-			Model:   getEnvOr("ITERATE_MODEL", "nvidia/llama-3.3-nemotron-70b-instruct"),
+			Model:   getEnvOr("ITERATE_MODEL", "meta/llama-3.3-70b-instruct"),
 			APIKey:  key,
 		}), nil
 
