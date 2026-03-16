@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Provider is the unified LLM interface.
@@ -116,9 +117,11 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		if key == "" {
 			return nil, fmt.Errorf("OPENCODE_API_KEY is required for opencode provider (or use --api-key)")
 		}
+		model := getEnvOr("ITERATE_MODEL", "nemotron-3-super-free")
+		model = strings.TrimPrefix(model, "opencode/")
 		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: "https://opencode.ai/zen/v1",
-			Model:   getEnvOr("ITERATE_MODEL", "opencode/nemotron-3-super-free"),
+			Model:   model,
 			APIKey:  key,
 		}), nil
 
