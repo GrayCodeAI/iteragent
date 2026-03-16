@@ -27,9 +27,11 @@ func (p *nvidiaProvider) Name() string {
 }
 
 func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message) (string, error) {
-	url := p.cfg.BaseURL + "/chat/completions"
-	if p.cfg.BaseURL == "" {
+	url := p.cfg.BaseURL
+	if url == "" {
 		url = "https://integrate.api.nvidia.com/v1/chat/completions"
+	} else {
+		url = url + "/chat/completions"
 	}
 
 	reqBody := openaiRequest{
