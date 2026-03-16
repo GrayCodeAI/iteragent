@@ -14,7 +14,13 @@ type Provider interface {
 
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
 // Supported values: ollama, openai, anthropic, groq, gemini (default: gemini)
-func NewProvider(providerName string) (Provider, error) {
+// If apiKey is provided, it takes priority over environment variables.
+func NewProvider(providerName string, apiKey ...string) (Provider, error) {
+	providedKey := ""
+	if len(apiKey) > 0 {
+		providedKey = apiKey[0]
+	}
+
 	if providerName == "" {
 		providerName = os.Getenv("ITERATE_PROVIDER")
 	}
@@ -24,16 +30,23 @@ func NewProvider(providerName string) (Provider, error) {
 
 	switch providerName {
 	case "ollama":
+		key := providedKey
+		if key == "" {
+			key = os.Getenv("OPENAI_API_KEY")
+		}
 		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: getEnvOr("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
 			Model:   getEnvOr("ITERATE_MODEL", "llama3"),
-			APIKey:  "ollama",
+			APIKey:  key,
 		}), nil
 
 	case "openai":
-		key := os.Getenv("OPENAI_API_KEY")
+		key := providedKey
 		if key == "" {
-			return nil, fmt.Errorf("OPENAI_API_KEY is required for openai provider")
+			key = os.Getenv("OPENAI_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY is required for openai provider (or use --api-key)")
 		}
 		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: "https://api.openai.com/v1",
@@ -42,9 +55,12 @@ func NewProvider(providerName string) (Provider, error) {
 		}), nil
 
 	case "anthropic":
-		key := os.Getenv("ANTHROPIC_API_KEY")
+		key := providedKey
 		if key == "" {
-			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required for anthropic provider")
+			key = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required for anthropic provider (or use --api-key)")
 		}
 		return NewAnthropic(AnthropicConfig{
 			Model:  getEnvOr("ITERATE_MODEL", "claude-sonnet-4-6"),
@@ -52,9 +68,12 @@ func NewProvider(providerName string) (Provider, error) {
 		}), nil
 
 	case "groq":
-		key := os.Getenv("GROQ_API_KEY")
+		key := providedKey
 		if key == "" {
-			return nil, fmt.Errorf("GROQ_API_KEY is required for groq provider")
+			key = os.Getenv("GROQ_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("GROQ_API_KEY is required for groq provider (or use --api-key)")
 		}
 		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: "https://api.groq.com/openai/v1",
@@ -63,9 +82,12 @@ func NewProvider(providerName string) (Provider, error) {
 		}), nil
 
 	case "gemini":
-		key := os.Getenv("GEMINI_API_KEY")
+		key := providedKey
 		if key == "" {
-			return nil, fmt.Errorf("GEMINI_API_KEY is required for gemini provider")
+			key = os.Getenv("GEMINI_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("GEMINI_API_KEY is required for gemini provider (or use --api-key)")
 		}
 		return NewGemini(GeminiConfig{
 			Model:  getEnvOr("ITERATE_MODEL", "gemini-2.0-flash"),
@@ -77,10 +99,14 @@ func NewProvider(providerName string) (Provider, error) {
 		if baseURL == "" {
 			return nil, fmt.Errorf("unknown provider %q — set ITERATE_BASE_URL for custom endpoints", providerName)
 		}
+		key := providedKey
+		if key == "" {
+			key = os.Getenv("ITERATE_API_KEY")
+		}
 		return NewOpenAICompat(OpenAICompatConfig{
 			BaseURL: baseURL,
 			Model:   getEnvOr("ITERATE_MODEL", "default"),
-			APIKey:  getEnvOr("ITERATE_API_KEY", "none"),
+			APIKey:  key,
 		}), nil
 	}
 }
