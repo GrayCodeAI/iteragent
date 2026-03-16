@@ -226,6 +226,7 @@ const (
 	EventToolExecutionEnd    EventType = "tool_execution_end"
 	EventProgressMessage     EventType = "progress_message"
 	EventInputRejected       EventType = "input_rejected"
+	EventError               EventType = "error"
 )
 
 type AgentEvent struct {

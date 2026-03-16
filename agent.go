@@ -23,8 +23,14 @@ type Tool struct {
 
 // Event represents a step in the agent's reasoning.
 type Event struct {
-	Type    string
-	Content string
+	Type       string
+	Content    string
+	ToolCallID string
+	ToolName   string
+	Args       map[string]interface{}
+	Result     string
+	IsError    bool
+	Thinking   string
 }
 
 // Agent is the core reasoning loop.
@@ -75,14 +81,15 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (stri
 	const maxIterations = 20
 	for i := 0; i < maxIterations; i++ {
 		a.logger.Info("agent iteration", "step", i+1)
+		a.emit(Event{Type: string(EventTurnStart), Content: fmt.Sprintf("turn %d", i+1)})
 
 		response, err := a.provider.Complete(ctx, messages)
 		if err != nil {
-			a.emit(Event{Type: "error", Content: err.Error()})
+			a.emit(Event{Type: string(EventError), Content: err.Error(), IsError: true})
 			return "", fmt.Errorf("provider error at step %d: %w", i+1, err)
 		}
 
-		a.emit(Event{Type: "thought", Content: response})
+		a.emit(Event{Type: string(EventMessageUpdate), Content: response})
 
 		messages = append(messages, Message{
 			Role:    "assistant",
@@ -91,7 +98,8 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (stri
 
 		calls := ParseToolCalls(response)
 		if len(calls) == 0 {
-			a.emit(Event{Type: "done", Content: response})
+			a.emit(Event{Type: string(EventMessageEnd), Content: response})
+			a.emit(Event{Type: string(EventTurnEnd), Content: ""})
 			return response, nil
 		}
 
@@ -101,19 +109,35 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (stri
 			if !ok {
 				result := fmt.Sprintf("unknown tool: %s", call.Tool)
 				toolResults.WriteString(fmt.Sprintf("Tool %s: %s\n", call.Tool, result))
-				a.emit(Event{Type: "tool_result", Content: result})
+				a.emit(Event{Type: string(EventToolExecutionEnd), ToolName: call.Tool, Result: result, IsError: true})
 				continue
 			}
 
-			a.emit(Event{Type: "tool_call", Content: fmt.Sprintf("%s(%v)", call.Tool, call.Args)})
+			argsMap := make(map[string]interface{})
+			for k, v := range call.Args {
+				argsMap[k] = v
+			}
+			a.emit(Event{
+				Type:       string(EventToolExecutionStart),
+				ToolName:   call.Tool,
+				ToolCallID: call.Tool + "-" + fmt.Sprintf("%d", i),
+				Args:       argsMap,
+			})
 			a.logger.Info("executing tool", "tool", call.Tool, "args", call.Args)
 
 			result, err := tool.Execute(ctx, call.Args)
+			isError := false
 			if err != nil {
 				result = fmt.Sprintf("ERROR: %s\nOutput: %s", err.Error(), result)
+				isError = true
 			}
 
-			a.emit(Event{Type: "tool_result", Content: result})
+			a.emit(Event{
+				Type:     string(EventToolExecutionEnd),
+				ToolName: call.Tool,
+				Result:   result,
+				IsError:  isError,
+			})
 			toolResults.WriteString(fmt.Sprintf("Tool %s result:\n%s\n\n", call.Tool, result))
 		}
 
@@ -121,6 +145,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string) (stri
 			Role:    "user",
 			Content: toolResults.String(),
 		})
+		a.emit(Event{Type: string(EventTurnEnd), Content: ""})
 	}
 
 	return "", fmt.Errorf("agent exceeded max iterations (%d)", maxIterations)
