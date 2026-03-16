@@ -97,3 +97,7 @@ func (s *SkillSet) FormatForPrompt() string {
 
 	return sb.String()
 }
+
+func SkillSetEmpty() *SkillSet {
+	return &SkillSet{Skills: []Skill{}}
+}
