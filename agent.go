@@ -199,7 +199,13 @@ func ToolMap(tools []Tool) map[string]Tool {
 func ToolDescriptions(tools []Tool) string {
 	var sb strings.Builder
 	sb.WriteString("## Available tools\n\n")
-	sb.WriteString("Call tools using:\n```tool\n{\"tool\":\"name\",\"args\":{\"key\":\"value\"}}\n```\n\n")
+	sb.WriteString("IMPORTANT - How to call tools:\n")
+	sb.WriteString("When you need to use a tool, you MUST use this EXACT format:\n\n")
+	sb.WriteString("```tool\n")
+	sb.WriteString("{\"tool\":\"TOOL_NAME\",\"args\":{\"arg1\":\"value1\"}}\n")
+	sb.WriteString("```\n\n")
+	sb.WriteString("Replace TOOL_NAME with the tool name and provide arguments as JSON.\n\n")
+	sb.WriteString("Available tools:\n\n")
 	for _, t := range tools {
 		sb.WriteString(fmt.Sprintf("### %s\n%s\n\n", t.Name, t.Description))
 	}
