@@ -13,7 +13,7 @@ type Provider interface {
 }
 
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
-// Supported values: ollama, openai, anthropic, groq, gemini (default: gemini)
+// Supported values: ollama, openai, anthropic, groq, gemini, nvidia (default: gemini)
 // If apiKey is provided, it takes priority over environment variables.
 func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 	providedKey := ""
@@ -92,6 +92,20 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		return NewGemini(GeminiConfig{
 			Model:  getEnvOr("ITERATE_MODEL", "gemini-2.0-flash"),
 			APIKey: key,
+		}), nil
+
+	case "nvidia":
+		key := providedKey
+		if key == "" {
+			key = os.Getenv("NVIDIA_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("NVIDIA_API_KEY is required for nvidia provider (or use --api-key)")
+		}
+		return NewNvidia(OpenAICompatConfig{
+			BaseURL: getEnvOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+			Model:   getEnvOr("ITERATE_MODEL", "nvidia/llama-3.3-nemotron-70b-instruct"),
+			APIKey:  key,
 		}), nil
 
 	default:
