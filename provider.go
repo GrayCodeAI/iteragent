@@ -68,13 +68,10 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 	case "anthropic":
 		key := providedKey
 		if key == "" {
-			key = os.Getenv("OPENCODE_API_KEY")
-		}
-		if key == "" {
 			key = os.Getenv("ANTHROPIC_API_KEY")
 		}
 		if key == "" {
-			return nil, fmt.Errorf("OPENCODE_API_KEY is required for anthropic provider (or use --api-key)")
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY is required for anthropic provider (or use --api-key)")
 		}
 		return NewAnthropic(AnthropicConfig{
 			Model:  getEnvOr("ITERATE_MODEL", "claude-sonnet-4-6"),
