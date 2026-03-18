@@ -34,19 +34,6 @@ func (p *geminiProvider) Name() string {
 	return fmt.Sprintf("gemini(%s)", p.cfg.Model)
 }
 
-type geminiRequest struct {
-	Contents []struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	} `json:"contents"`
-	SystemInstruction *struct {
-		Parts []struct {
-			Text string `json:"text"`
-		} `json:"parts"`
-	} `json:"systemInstruction,omitempty"`
-}
-
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
@@ -60,7 +47,28 @@ type geminiResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (p *geminiProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+// geminiThinkingBudget returns the thinking budget for the given level (Gemini).
+func geminiThinkingBudget(level ThinkingLevel) int {
+	switch level {
+	case ThinkingLevelMinimal:
+		return 512
+	case ThinkingLevelLow:
+		return 2048
+	case ThinkingLevelMedium:
+		return 4096
+	case ThinkingLevelHigh:
+		return 8192
+	default:
+		return 0
+	}
+}
+
+func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	var system string
 	var contents []string
 	for _, m := range messages {
@@ -71,28 +79,42 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message) (stri
 		}
 	}
 
-	reqBody := geminiRequest{}
+	// Build request as a generic map to support optional fields.
+	reqMap := map[string]interface{}{}
+
 	if system != "" {
-		reqBody.SystemInstruction = &struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		}{}
-		reqBody.SystemInstruction.Parts = []struct {
-			Text string `json:"text"`
-		}{{Text: system}}
-	}
-	for _, c := range contents {
-		reqBody.Contents = append(reqBody.Contents, struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		}{Parts: []struct {
-			Text string `json:"text"`
-		}{{Text: c}}})
+		reqMap["systemInstruction"] = map[string]interface{}{
+			"parts": []map[string]string{{"text": system}},
+		}
 	}
 
-	body, err := json.Marshal(reqBody)
+	var contentsSlice []map[string]interface{}
+	for _, c := range contents {
+		contentsSlice = append(contentsSlice, map[string]interface{}{
+			"parts": []map[string]string{{"text": c}},
+		})
+	}
+	reqMap["contents"] = contentsSlice
+
+	// Add generationConfig including thinkingConfig if enabled.
+	genConfig := map[string]interface{}{}
+	if opt.MaxTokens > 0 {
+		genConfig["maxOutputTokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		genConfig["temperature"] = opt.Temperature
+	}
+	if opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
+		budget := geminiThinkingBudget(opt.ThinkingLevel)
+		genConfig["thinkingConfig"] = map[string]interface{}{
+			"thinkingBudget": budget,
+		}
+	}
+	if len(genConfig) > 0 {
+		reqMap["generationConfig"] = genConfig
+	}
+
+	body, err := json.Marshal(reqMap)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}

@@ -33,13 +33,6 @@ func (p *anthropicProvider) Name() string {
 	return fmt.Sprintf("anthropic(%s)", p.cfg.Model)
 }
 
-type anthropicRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []Message `json:"messages"`
-}
-
 type anthropicResponse struct {
 	Content []struct {
 		Text string `json:"text"`
@@ -49,7 +42,28 @@ type anthropicResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (p *anthropicProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+// thinkingBudget returns the token budget for the given thinking level (Anthropic).
+func thinkingBudget(level ThinkingLevel) int {
+	switch level {
+	case ThinkingLevelMinimal:
+		return 1024
+	case ThinkingLevelLow:
+		return 4096
+	case ThinkingLevelMedium:
+		return 8192
+	case ThinkingLevelHigh:
+		return 16000
+	default:
+		return 0
+	}
+}
+
+func (p *anthropicProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	var system string
 	var filtered []Message
 	for _, m := range messages {
@@ -60,12 +74,45 @@ func (p *anthropicProvider) Complete(ctx context.Context, messages []Message) (s
 		}
 	}
 
-	body, err := json.Marshal(anthropicRequest{
-		Model:     p.cfg.Model,
-		MaxTokens: 4096,
-		System:    system,
-		Messages:  filtered,
-	})
+	maxTokens := 4096
+	if opt.MaxTokens > 0 {
+		maxTokens = opt.MaxTokens
+	}
+
+	reqMap := map[string]interface{}{
+		"model":      p.cfg.Model,
+		"max_tokens": maxTokens,
+		"messages":   filtered,
+	}
+
+	// System prompt: use cache_control breakpoint when caching is enabled.
+	if system != "" {
+		cacheEnabled := opt.CacheConfig != nil && opt.CacheConfig.Enabled && opt.CacheConfig.CacheSystem
+		if cacheEnabled {
+			reqMap["system"] = []map[string]interface{}{
+				{
+					"type": "text",
+					"text": system,
+					"cache_control": map[string]string{
+						"type": "ephemeral",
+					},
+				},
+			}
+		} else {
+			reqMap["system"] = system
+		}
+	}
+
+	// Add thinking config if enabled.
+	if opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
+		budget := thinkingBudget(opt.ThinkingLevel)
+		reqMap["thinking"] = map[string]interface{}{
+			"type":          "enabled",
+			"budget_tokens": budget,
+		}
+	}
+
+	body, err := json.Marshal(reqMap)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
@@ -77,6 +124,10 @@ func (p *anthropicProvider) Complete(ctx context.Context, messages []Message) (s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", p.cfg.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	// Enable prompt caching beta feature.
+	if opt.CacheConfig != nil && opt.CacheConfig.Enabled {
+		req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {

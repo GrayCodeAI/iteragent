@@ -78,7 +78,7 @@ func messagesToResponsesFormat(messages []Message) []map[string]interface{} {
 	return result
 }
 
-func (p *OpenAIResponsesProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+func (p *OpenAIResponsesProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	baseURL := p.config.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"

@@ -26,7 +26,7 @@ func (p *nvidiaProvider) Name() string {
 	return fmt.Sprintf("nvidia(%s)", p.cfg.Model)
 }
 
-func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	url := p.cfg.BaseURL
 	if url == "" {
 		url = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -34,10 +34,10 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message) (stri
 		url = url + "/chat/completions"
 	}
 
-	reqBody := openaiRequest{
-		Model:    p.cfg.Model,
-		Messages: messages,
-		Stream:   false,
+	reqBody := map[string]interface{}{
+		"model":    p.cfg.Model,
+		"messages": messages,
+		"stream":   false,
 	}
 
 	body, err := json.Marshal(reqBody)

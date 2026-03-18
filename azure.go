@@ -36,7 +36,8 @@ func (p *AzureOpenAIProvider) Name() string {
 	return "azure_openai"
 }
 
-func (p *AzureOpenAIProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+// TODO: Add ThinkingLevel support for Azure OpenAI when provider supports it.
+func (p *AzureOpenAIProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	apiVersion := p.config.APIVersion
 	if apiVersion == "" {
 		apiVersion = "2024-02-15-preview"

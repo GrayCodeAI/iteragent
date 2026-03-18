@@ -137,27 +137,43 @@ func DefaultCacheConfig() CacheConfig {
 	}
 }
 
-type ToolExecutionStrategy struct {
-	Type string
-	Size int
+// ToolExecutionStrategy selects how multiple concurrent tool calls are executed.
+type ToolExecutionStrategy int
+
+const (
+	ToolExecSequential ToolExecutionStrategy = iota
+	ToolExecParallel
+	ToolExecBatched
+)
+
+// ToolExecConfig holds the tool execution strategy and its parameters.
+type ToolExecConfig struct {
+	Strategy  ToolExecutionStrategy
+	BatchSize int // only used for ToolExecBatched
 }
 
+// DefaultToolExecConfig returns the default tool execution configuration (parallel).
+func DefaultToolExecConfig() ToolExecConfig {
+	return ToolExecConfig{Strategy: ToolExecParallel}
+}
+
+// Legacy string-based constants kept for compatibility.
 const (
 	ToolExecTypeParallel   = "parallel"
 	ToolExecTypeSequential = "sequential"
 	ToolExecTypeBatched    = "batched"
 )
 
-func NewParallelStrategy() ToolExecutionStrategy {
-	return ToolExecutionStrategy{Type: ToolExecTypeParallel}
+func NewParallelStrategy() ToolExecConfig {
+	return ToolExecConfig{Strategy: ToolExecParallel}
 }
 
-func NewSequentialStrategy() ToolExecutionStrategy {
-	return ToolExecutionStrategy{Type: ToolExecTypeSequential}
+func NewSequentialStrategy() ToolExecConfig {
+	return ToolExecConfig{Strategy: ToolExecSequential}
 }
 
-func NewBatchedStrategy(size int) ToolExecutionStrategy {
-	return ToolExecutionStrategy{Type: ToolExecTypeBatched, Size: size}
+func NewBatchedStrategy(size int) ToolExecConfig {
+	return ToolExecConfig{Strategy: ToolExecBatched, BatchSize: size}
 }
 
 type ToolContext struct {
@@ -226,6 +242,8 @@ const (
 	EventToolExecutionEnd    EventType = "tool_execution_end"
 	EventProgressMessage     EventType = "progress_message"
 	EventInputRejected       EventType = "input_rejected"
+	EventInputWarned         EventType = "input_warned"
+	EventContextCompacted    EventType = "context_compacted"
 	EventError               EventType = "error"
 )
 
@@ -251,7 +269,7 @@ const (
 )
 
 type InputFilter interface {
-	Filter(input string) (string, InputFilterResult)
+	Filter(input string) (filtered string, result InputFilterResult, reason string)
 }
 
 type CompactionStrategy interface {
@@ -261,7 +279,9 @@ type CompactionStrategy interface {
 type DefaultCompactionStrategy struct{}
 
 func (c *DefaultCompactionStrategy) Compact(messages []Message, maxTokens int) []Message {
-	return CompactMessages(messages, maxTokens)
+	cfg := DefaultContextConfig()
+	cfg.MaxTokens = maxTokens
+	return CompactMessagesTiered(messages, cfg)
 }
 
 type ToolDefinition struct {
@@ -340,13 +360,6 @@ type StreamEvent struct {
 	Index   int
 	Content string
 	Error   string
-}
-
-func CompactMessages(messages []Message, maxTokens int) []Message {
-	if len(messages) <= 1 {
-		return messages
-	}
-	return messages
 }
 
 type ProviderError struct {

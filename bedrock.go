@@ -39,7 +39,8 @@ func (p *BedrockProvider) Name() string {
 	return "bedrock"
 }
 
-func (p *BedrockProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+// TODO: Add ThinkingLevel support for Bedrock when provider supports it.
+func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	url := fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse",
 		p.config.Region, p.config.Model)
 

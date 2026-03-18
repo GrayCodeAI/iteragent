@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -34,12 +35,6 @@ func (p *openaiCompatProvider) Name() string {
 	return fmt.Sprintf("openai-compat(%s)", p.cfg.Model)
 }
 
-type openaiRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-}
-
 type openaiResponse struct {
 	Choices []struct {
 		Message struct {
@@ -51,12 +46,53 @@ type openaiResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func (p *openaiCompatProvider) Complete(ctx context.Context, messages []Message) (string, error) {
-	body, err := json.Marshal(openaiRequest{
-		Model:    p.cfg.Model,
-		Messages: messages,
-		Stream:   false,
-	})
+// openaiReasoningEffort maps ThinkingLevel to reasoning_effort string for OpenAI.
+func openaiReasoningEffort(level ThinkingLevel) string {
+	switch level {
+	case ThinkingLevelMinimal, ThinkingLevelLow:
+		return "low"
+	case ThinkingLevelMedium:
+		return "medium"
+	case ThinkingLevelHigh:
+		return "high"
+	default:
+		return ""
+	}
+}
+
+// supportsReasoningEffort returns true if the base URL is an OpenAI endpoint.
+func (p *openaiCompatProvider) supportsReasoningEffort() bool {
+	return strings.Contains(p.cfg.BaseURL, "openai.com")
+}
+
+func (p *openaiCompatProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	reqMap := map[string]interface{}{
+		"model":    p.cfg.Model,
+		"messages": messages,
+		"stream":   false,
+	}
+
+	if opt.MaxTokens > 0 {
+		reqMap["max_tokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		reqMap["temperature"] = opt.Temperature
+	}
+
+	// Add reasoning_effort only for OpenAI endpoints that support it.
+	if p.supportsReasoningEffort() && opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
+		effort := openaiReasoningEffort(opt.ThinkingLevel)
+		if effort != "" {
+			reqMap["reasoning_effort"] = effort
+		}
+	}
+
+	body, err := json.Marshal(reqMap)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}

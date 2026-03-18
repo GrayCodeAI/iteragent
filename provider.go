@@ -7,9 +7,19 @@ import (
 	"strings"
 )
 
+// CompletionOptions carries per-call configuration to providers.
+type CompletionOptions struct {
+	ThinkingLevel ThinkingLevel
+	MaxTokens     int
+	Temperature   float32
+	// CacheConfig enables prompt caching for providers that support it (e.g. Anthropic).
+	// If nil, caching is disabled.
+	CacheConfig *CacheConfig
+}
+
 // Provider is the unified LLM interface.
 type Provider interface {
-	Complete(ctx context.Context, messages []Message) (string, error)
+	Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error)
 	Name() string
 }
 

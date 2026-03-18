@@ -2,6 +2,7 @@ package iteragent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -40,7 +41,7 @@ func (p *MockProvider) Name() string {
 	return fmt.Sprintf("mock(%s)", p.model)
 }
 
-func (p *MockProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+func (p *MockProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	if p.error != nil {
 		return "", p.error
 	}
@@ -82,7 +83,11 @@ func mustJson(v interface{}) string {
 	case string:
 		return v
 	default:
-		return fmt.Sprintf("%+v", v)
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%+v", v)
+		}
+		return string(data)
 	}
 }
 

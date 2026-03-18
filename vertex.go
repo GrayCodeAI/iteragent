@@ -65,7 +65,7 @@ func (p *VertexProvider) getAccessToken(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("no credentials found for Vertex AI")
 }
 
-func (p *VertexProvider) Complete(ctx context.Context, messages []Message) (string, error) {
+func (p *VertexProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
 	location := p.config.Location
 	if location == "" {
 		location = "us-central1"

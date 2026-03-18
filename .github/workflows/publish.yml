@@ -1,0 +1,39 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+      # The Go module proxy picks up new versions automatically from git tags.
+      # This step just validates the tag is clean and the module is importable.
+      - name: Verify module
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "Publishing iteragent $TAG"
+          go list -m github.com/GrayCodeAI/iteragent
+
+      # Trigger the module proxy to index the new version.
+      - name: Notify module proxy
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          curl -s "https://sum.golang.org/lookup/github.com/GrayCodeAI/iteragent@${TAG}" || true
+          curl -s "https://proxy.golang.org/github.com/!gray!code!a!i/iteragent/@v/${TAG}.info" || true
+          echo "Module proxy notified for $TAG"

@@ -7,17 +7,25 @@ import (
 	"strings"
 )
 
+// Skill represents a loaded agent skill.
 type Skill struct {
 	Name        string
 	Description string
-	Content     string
-	Path        string
+	// Content holds the full skill body (everything after the frontmatter).
+	// It is NOT injected into the system prompt by default — only metadata is.
+	Content string
+	// RawFrontmatter is the raw YAML frontmatter block.
+	RawFrontmatter string
+	Path           string
 }
 
+// SkillSet is a collection of loaded skills.
 type SkillSet struct {
 	Skills []Skill
 }
 
+// LoadSkills scans dirs for skill subdirectories. For each subdirectory it looks
+// for SKILL.md (AgentSkills standard) first, then falls back to skill.md.
 func LoadSkills(dirs []string) (*SkillSet, error) {
 	var skills []Skill
 
@@ -32,20 +40,39 @@ func LoadSkills(dirs []string) (*SkillSet, error) {
 				continue
 			}
 
-			skillPath := filepath.Join(dir, entry.Name(), "skill.md")
+			// Try SKILL.md first (AgentSkills standard), then skill.md.
+			var skillPath string
+			candidates := []string{
+				filepath.Join(dir, entry.Name(), "SKILL.md"),
+				filepath.Join(dir, entry.Name(), "skill.md"),
+			}
+			for _, c := range candidates {
+				if _, err := os.Stat(c); err == nil {
+					skillPath = c
+					break
+				}
+			}
+			if skillPath == "" {
+				continue
+			}
+
 			data, err := os.ReadFile(skillPath)
 			if err != nil {
 				continue
 			}
 
-			content := string(data)
-			name, desc := parseSkillFrontmatter(content)
+			raw := string(data)
+			name, desc, frontmatter, body := parseSkillFile(raw)
+			if name == "" {
+				name = entry.Name()
+			}
 
 			skills = append(skills, Skill{
-				Name:        name,
-				Description: desc,
-				Content:     content,
-				Path:        skillPath,
+				Name:           name,
+				Description:    desc,
+				Content:        body,
+				RawFrontmatter: frontmatter,
+				Path:           skillPath,
 			})
 		}
 	}
@@ -53,51 +80,90 @@ func LoadSkills(dirs []string) (*SkillSet, error) {
 	return &SkillSet{Skills: skills}, nil
 }
 
-func parseSkillFrontmatter(content string) (name, desc string) {
+// parseSkillFile parses a skill file and returns (name, description, frontmatter, body).
+func parseSkillFile(content string) (name, desc, frontmatter, body string) {
 	lines := strings.Split(content, "\n")
 	inFrontmatter := false
+	frontmatterEnd := -1
+	var fmLines []string
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "---" {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if !inFrontmatter && i == 0 {
+				inFrontmatter = true
+				continue
+			}
 			if inFrontmatter {
+				frontmatterEnd = i
 				inFrontmatter = false
 				continue
 			}
-			inFrontmatter = true
-			continue
 		}
-
 		if inFrontmatter {
-			if strings.HasPrefix(line, "name:") {
-				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			fmLines = append(fmLines, line)
+			if strings.HasPrefix(trimmed, "name:") {
+				name = strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
+				// Remove surrounding quotes if present.
+				name = strings.Trim(name, `"'`)
 			}
-			if strings.HasPrefix(line, "description:") {
-				desc = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+			if strings.HasPrefix(trimmed, "description:") {
+				desc = strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
+				desc = strings.Trim(desc, `"'`)
 			}
 		}
 	}
 
-	return name, desc
+	frontmatter = strings.Join(fmLines, "\n")
+
+	if frontmatterEnd >= 0 && frontmatterEnd+1 < len(lines) {
+		body = strings.TrimSpace(strings.Join(lines[frontmatterEnd+1:], "\n"))
+	} else if frontmatterEnd < 0 {
+		// No frontmatter — entire file is the body.
+		body = strings.TrimSpace(content)
+	}
+
+	return
 }
 
+// parseSkillFrontmatter is kept for backward compatibility.
+func parseSkillFrontmatter(content string) (name, desc string) {
+	name, desc, _, _ = parseSkillFile(content)
+	return
+}
+
+// FormatForPrompt returns an XML <available_skills> block listing skill metadata.
+// Only name and description are included — the full content is NOT injected.
+// The LLM can request full skill content via the read_file tool.
 func (s *SkillSet) FormatForPrompt() string {
 	if len(s.Skills) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n\n## Available Skills\n\n")
-	sb.WriteString("You have access to skills that can help you:\n\n")
-
+	sb.WriteString("\n\n<available_skills>\n")
 	for _, skill := range s.Skills {
-		sb.WriteString(fmt.Sprintf("### %s\n", skill.Name))
-		sb.WriteString(fmt.Sprintf("%s\n\n", skill.Description))
+		sb.WriteString(fmt.Sprintf(
+			"  <skill name=%q description=%q path=%q />\n",
+			skill.Name, skill.Description, skill.Path,
+		))
 	}
-
+	sb.WriteString("</available_skills>\n")
+	sb.WriteString("\nTo use a skill, read its full content with the read_file tool using the path above.\n")
 	return sb.String()
 }
 
+// Get returns the skill with the given name, or nil if not found.
+func (s *SkillSet) Get(name string) *Skill {
+	for i := range s.Skills {
+		if s.Skills[i].Name == name {
+			return &s.Skills[i]
+		}
+	}
+	return nil
+}
+
+// SkillSetEmpty returns an empty SkillSet.
 func SkillSetEmpty() *SkillSet {
 	return &SkillSet{Skills: []Skill{}}
 }
