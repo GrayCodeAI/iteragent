@@ -33,16 +33,73 @@ func IsRetryable(err error) bool {
 		return false
 	}
 
+	// Explicit RetryableError wrapper always retries.
+	if _, ok := err.(*RetryableError); ok {
+		return true
+	}
+
+	// Context cancellation / deadline should NOT be retried.
+	if err == context.Canceled || err == context.DeadlineExceeded {
+		return false
+	}
+
 	errStr := err.Error()
+
+	// HTTP status codes that indicate transient server-side problems.
+	retryableStatusCodes := []string{
+		"429",  // Too Many Requests
+		"500",  // Internal Server Error
+		"502",  // Bad Gateway
+		"503",  // Service Unavailable
+		"504",  // Gateway Timeout
+		"529",  // Anthropic overloaded
+	}
+	for _, code := range retryableStatusCodes {
+		// Match "API error 429:", "status 429", "error (429)", "HTTP 429", etc.
+		if containsIgnoreCase(errStr, " "+code) ||
+			containsIgnoreCase(errStr, "("+code+")") ||
+			containsIgnoreCase(errStr, "error "+code) {
+			return true
+		}
+	}
+
+	// Transient network and infrastructure phrases (all providers).
 	retryablePhrases := []string{
 		"rate limit",
-		"429",
+		"rate_limit",
+		"ratelimit",
+		"too many requests",
+		"quota exceeded",
 		"timeout",
+		"timed out",
+		"deadline exceeded",
 		"temporary",
-		"connection",
+		"temporarily",
+		"connection reset",
+		"connection refused",
+		"connection error",
+		"no such host",
 		"network",
-		"503",
-		"502",
+		"eof",
+		"broken pipe",
+		"overloaded",
+		"server error",
+		"internal error",
+		"service unavailable",
+		"bad gateway",
+		// Azure-specific
+		"content filter",
+		"azure openai error (429)",
+		"azure openai error (500)",
+		"azure openai error (503)",
+		// Vertex-specific
+		"vertex error (429)",
+		"vertex error (500)",
+		"vertex error (503)",
+		// Bedrock-specific
+		"throttlingexception",
+		"serviceunavailableexception",
+		"internalservererror",
 	}
 
 	for _, phrase := range retryablePhrases {
@@ -51,23 +108,11 @@ func IsRetryable(err error) bool {
 		}
 	}
 
-	_, ok := err.(*RetryableError)
-	return ok
+	return false
 }
 
 func containsIgnoreCase(s, substr string) bool {
-	s = strings.ToLower(s)
-	substr = strings.ToLower(substr)
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {

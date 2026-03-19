@@ -11,7 +11,7 @@
 //	/help       — show available commands
 //	/clear      — reset conversation history
 //	/tools      — list available tools
-//	/thinking   — cycle thinking level
+//	/thinking   — set thinking level
 //	/quit       — exit
 package main
 
@@ -49,6 +49,13 @@ func main() {
 	a := iteragent.New(p, iteragent.DefaultTools("."), logger).
 		WithSystemPrompt("You are a helpful coding assistant with access to tools.").
 		WithThinkingLevel(thinking)
+
+	// Close shuts down any MCP server connections when the REPL exits.
+	defer func() {
+		if err := a.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
+		}
+	}()
 
 	fmt.Printf("iteragent cli — provider: %s, thinking: %s\n", p.Name(), thinking)
 	fmt.Println("Type a message, or /help for commands.")
@@ -96,10 +103,10 @@ func main() {
 				continue
 			case "/help":
 				fmt.Println("Commands:")
-				fmt.Println("  /clear           — reset conversation")
-				fmt.Println("  /tools           — list available tools")
-				fmt.Println("  /thinking <lvl>  — set thinking level (off|minimal|low|medium|high)")
-				fmt.Println("  /quit            — exit")
+				fmt.Println("  /clear              — reset conversation")
+				fmt.Println("  /tools              — list available tools")
+				fmt.Println("  /thinking <level>   — set thinking level (off|minimal|low|medium|high)")
+				fmt.Println("  /quit               — exit")
 				continue
 			default:
 				fmt.Printf("Unknown command: %s (try /help)\n", line)
@@ -107,30 +114,38 @@ func main() {
 			}
 		}
 
-		// Stream the response.
+		// Stream tokens live as they arrive. EventTokenUpdate delivers each
+		// incremental chunk so the response appears word-by-word in the terminal.
+		var finalOutput string
+		var streaming bool
 		events := a.Prompt(ctx, line)
-		var lastOutput string
 		for e := range events {
 			switch iteragent.EventType(e.Type) {
-			case iteragent.EventMessageUpdate:
-				// Print incrementally — overwrite previous partial line.
-				fmt.Print("\r\033[K") // clear line
-				preview := e.Content
-				if len(preview) > 120 {
-					preview = preview[:120] + "…"
+			case iteragent.EventTokenUpdate:
+				// Print each token chunk immediately as it streams in.
+				if !streaming {
+					streaming = true
 				}
-				fmt.Print(preview)
+				fmt.Print(e.Content)
 			case iteragent.EventToolExecutionStart:
-				fmt.Printf("\n[tool] %s\n", e.ToolName)
+				if streaming {
+					fmt.Println()
+					streaming = false
+				}
+				fmt.Printf("[tool] %s\n", e.ToolName)
 			case iteragent.EventMessageEnd:
-				lastOutput = e.Content
+				finalOutput = e.Content
 			case iteragent.EventError:
 				fmt.Printf("\nError: %s\n", e.Content)
 			}
 		}
 		a.Finish()
 
-		fmt.Print("\r\033[K") // clear partial line
-		fmt.Printf("%s\n\n", lastOutput)
+		// If no streaming happened (provider doesn't implement TokenStreamer),
+		// print the final output now.
+		if !streaming && finalOutput != "" {
+			fmt.Print(finalOutput)
+		}
+		fmt.Print("\n\n")
 	}
 }

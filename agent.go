@@ -37,6 +37,19 @@ type Event struct {
 	Thinking   string
 }
 
+// AgentHooks provides optional callbacks for lifecycle events in the agent loop.
+// All fields are optional; nil functions are silently skipped.
+type AgentHooks struct {
+	// BeforeTurn is called before each provider completion turn. turn is 1-indexed.
+	BeforeTurn func(turn int, messages []Message)
+	// AfterTurn is called after each provider completion turn with the response.
+	AfterTurn func(turn int, response string)
+	// OnToolStart is called before each tool execution.
+	OnToolStart func(toolName string, args map[string]string)
+	// OnToolEnd is called after each tool execution with the result and any error.
+	OnToolEnd func(toolName string, result string, err error)
+}
+
 // Agent is the core reasoning loop.
 type Agent struct {
 	provider      Provider
@@ -60,6 +73,9 @@ type Agent struct {
 	// Input filters.
 	inputFilters []InputFilter
 
+	// Lifecycle hooks.
+	hooks AgentHooks
+
 	// Concurrency state — tracks whether a streaming operation is in progress.
 	mu          sync.Mutex
 	isStreaming bool
@@ -73,6 +89,10 @@ type Agent struct {
 
 	// cacheConfig controls prompt caching behaviour.
 	cacheConfig CacheConfig
+
+	// mcpClients holds MCP server connections owned by this agent.
+	// They are shut down when Close() is called.
+	mcpClients []*mcp.McpClient
 }
 
 // New creates a new Agent.
@@ -192,15 +212,25 @@ func (a *Agent) executeToolsParallel(ctx context.Context, calls []ToolCall, iter
 			})
 			tool, ok := a.tools[c.Tool]
 			if !ok {
-				results[i] = indexedResult{call: c, result: fmt.Sprintf("unknown tool: %s", c.Tool), isError: true, unknown: true}
+				res := fmt.Sprintf("unknown tool: %s", c.Tool)
+				if a.hooks.OnToolEnd != nil {
+					a.hooks.OnToolEnd(c.Tool, res, fmt.Errorf("unknown tool: %s", c.Tool))
+				}
+				results[i] = indexedResult{call: c, result: res, isError: true, unknown: true}
 				emitFn(Event{Type: string(EventToolExecutionEnd), ToolName: c.Tool, Result: results[i].result, IsError: true})
 				return
+			}
+			if a.hooks.OnToolStart != nil {
+				a.hooks.OnToolStart(c.Tool, c.Args)
 			}
 			res, err := tool.Execute(ctx, c.Args)
 			isErr := false
 			if err != nil {
 				res = fmt.Sprintf("ERROR: %s\nOutput: %s", err.Error(), res)
 				isErr = true
+			}
+			if a.hooks.OnToolEnd != nil {
+				a.hooks.OnToolEnd(c.Tool, res, err)
 			}
 			results[i] = indexedResult{call: c, result: res, isError: isErr}
 			emitFn(Event{Type: string(EventToolExecutionEnd), ToolName: c.Tool, Result: res, IsError: isErr})
@@ -258,11 +288,19 @@ func (a *Agent) executeSingleTool(ctx context.Context, call ToolCall, iteration 
 	})
 	a.logger.Info("executing tool", "tool", call.Tool, "args", call.Args)
 
+	if a.hooks.OnToolStart != nil {
+		a.hooks.OnToolStart(call.Tool, call.Args)
+	}
+
 	result, err := tool.Execute(ctx, call.Args)
 	isError := false
 	if err != nil {
 		result = fmt.Sprintf("ERROR: %s\nOutput: %s", err.Error(), result)
 		isError = true
+	}
+
+	if a.hooks.OnToolEnd != nil {
+		a.hooks.OnToolEnd(call.Tool, result, err)
 	}
 
 	emitFn(Event{
@@ -309,10 +347,32 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 		// Context compaction check before provider call.
 		messages = a.maybeCompact(messages, emit)
 
-		response, err := a.provider.Complete(ctx, messages, opts)
+		if a.hooks.BeforeTurn != nil {
+			a.hooks.BeforeTurn(i+1, messages)
+		}
+
+		var (
+			response string
+			err      error
+		)
+		if ts, ok := a.provider.(TokenStreamer); ok {
+			response, err = RetryWithResult(ctx, DefaultRetryConfig, func() (string, error) {
+				return ts.CompleteStream(ctx, messages, opts, func(token string) {
+					emit(Event{Type: string(EventTokenUpdate), Content: token})
+				})
+			})
+		} else {
+			response, err = RetryWithResult(ctx, DefaultRetryConfig, func() (string, error) {
+				return a.provider.Complete(ctx, messages, opts)
+			})
+		}
 		if err != nil {
 			emit(Event{Type: string(EventError), Content: err.Error(), IsError: true})
 			return "", fmt.Errorf("provider error at step %d: %w", i+1, err)
+		}
+
+		if a.hooks.AfterTurn != nil {
+			a.hooks.AfterTurn(i+1, response)
 		}
 
 		emit(Event{Type: string(EventMessageUpdate), Content: response})
@@ -489,9 +549,26 @@ func (a *Agent) WithInputFilter(f InputFilter) *Agent {
 	return a
 }
 
+// WithHooks sets lifecycle hook callbacks on the agent.
+func (a *Agent) WithHooks(h AgentHooks) *Agent {
+	a.hooks = h
+	return a
+}
+
 // WithCacheConfig enables prompt caching with the given configuration.
 func (a *Agent) WithCacheConfig(cfg CacheConfig) *Agent {
 	a.cacheConfig = cfg
+	return a
+}
+
+// WithCacheEnabled is a convenience builder that enables or disables prompt
+// caching using the DefaultCacheConfig when enabled is true.
+func (a *Agent) WithCacheEnabled(enabled bool) *Agent {
+	if enabled {
+		a.cacheConfig = DefaultCacheConfig()
+	} else {
+		a.cacheConfig = CacheConfig{}
+	}
 	return a
 }
 
@@ -529,7 +606,40 @@ func (a *Agent) registerMcpTools(ctx context.Context, adapter *mcp.ToolAdapter) 
 			Execute:     execute,
 		}
 	}
+	// Track the client so Close() can shut it down.
+	if client := adapter.Client(); client != nil {
+		a.mu.Lock()
+		a.mcpClients = append(a.mcpClients, client)
+		a.mu.Unlock()
+	}
 	return a, nil
+}
+
+// Close shuts down any MCP server connections owned by this agent,
+// cancels any running operation, and waits for it to finish.
+// Safe to call multiple times.
+func (a *Agent) Close() error {
+	a.Reset() // cancel + drain pending work
+
+	a.mu.Lock()
+	clients := a.mcpClients
+	a.mcpClients = nil
+	a.mu.Unlock()
+
+	var errs []error
+	for _, c := range clients {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return fmt.Errorf("mcp close errors: %s", strings.Join(msgs, "; "))
+	}
+	return nil
 }
 
 // WithOpenApiFile loads an OpenAPI spec from a JSON file and registers its operations as tools.
@@ -713,10 +823,32 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 			// Context compaction check before provider call.
 			fullMessages = a.maybeCompact(fullMessages, emitFn)
 
-			response, err := a.provider.Complete(loopCtx, fullMessages, opts)
-			if err != nil {
-				emitFn(Event{Type: string(EventError), Content: err.Error(), IsError: true})
+			if a.hooks.BeforeTurn != nil {
+				a.hooks.BeforeTurn(i+1, fullMessages)
+			}
+
+			var (
+				response string
+				turnErr  error
+			)
+			if ts, ok := a.provider.(TokenStreamer); ok {
+				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+					return ts.CompleteStream(loopCtx, fullMessages, opts, func(token string) {
+						emitFn(Event{Type: string(EventTokenUpdate), Content: token})
+					})
+				})
+			} else {
+				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+					return a.provider.Complete(loopCtx, fullMessages, opts)
+				})
+			}
+			if turnErr != nil {
+				emitFn(Event{Type: string(EventError), Content: turnErr.Error(), IsError: true})
 				break
+			}
+
+			if a.hooks.AfterTurn != nil {
+				a.hooks.AfterTurn(i+1, response)
 			}
 
 			emitFn(Event{Type: string(EventMessageUpdate), Content: response})

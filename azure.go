@@ -105,6 +105,49 @@ func (p *AzureOpenAIProvider) Complete(ctx context.Context, messages []Message, 
 	return response.Choices[0].Message.Content, nil
 }
 
+// CompleteStream implements TokenStreamer for Azure OpenAI using the SSE streaming endpoint.
+func (p *AzureOpenAIProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	apiVersion := p.config.APIVersion
+	if apiVersion == "" {
+		apiVersion = "2024-02-15-preview"
+	}
+	url := fmt.Sprintf("%s/openai/deployments/%s/chat/completions?api-version=%s",
+		p.config.Endpoint, p.config.Deployment, apiVersion)
+
+	body := map[string]interface{}{
+		"messages": messagesToAzureFormat(messages),
+		"stream":   true,
+	}
+	if opt.MaxTokens > 0 {
+		body["max_tokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		body["temperature"] = opt.Temperature
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, url, map[string]string{"api-key": p.config.APIKey}, jsonBody, func(e SSEEvent) {
+		if e.Data == "[DONE]" {
+			return
+		}
+		if token, ok := ParseOpenAISSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("azure stream: %w", err)
+	}
+	return full.String(), nil
+}
+
 func messagesToAzureFormat(messages []Message) []map[string]interface{} {
 	result := make([]map[string]interface{}, len(messages))
 	for i, msg := range messages {

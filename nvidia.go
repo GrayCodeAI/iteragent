@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -78,4 +79,48 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts 
 	}
 
 	return parsed.Choices[0].Message.Content, nil
+}
+
+// CompleteStream implements TokenStreamer for Nvidia using the OpenAI-compatible SSE endpoint.
+func (p *nvidiaProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	url := p.cfg.BaseURL
+	if url == "" {
+		url = "https://integrate.api.nvidia.com/v1/chat/completions"
+	} else {
+		url = url + "/chat/completions"
+	}
+
+	reqBody := map[string]interface{}{
+		"model":    p.cfg.Model,
+		"messages": messages,
+		"stream":   true,
+	}
+	if opt.MaxTokens > 0 {
+		reqBody["max_tokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		reqBody["temperature"] = opt.Temperature
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, url, map[string]string{"Authorization": "Bearer " + p.cfg.APIKey}, body, func(e SSEEvent) {
+		if e.Data == "[DONE]" {
+			return
+		}
+		if token, ok := ParseOpenAISSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("nvidia stream: %w", err)
+	}
+	return full.String(), nil
 }

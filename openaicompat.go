@@ -24,6 +24,7 @@ type openaiCompatProvider struct {
 }
 
 // NewOpenAICompat returns an OpenAI-compatible provider.
+// The returned provider implements both Provider and TokenStreamer.
 func NewOpenAICompat(cfg OpenAICompatConfig) Provider {
 	return &openaiCompatProvider{
 		cfg:    cfg,
@@ -65,34 +66,68 @@ func (p *openaiCompatProvider) supportsReasoningEffort() bool {
 	return strings.Contains(p.cfg.BaseURL, "openai.com")
 }
 
-func (p *openaiCompatProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
-	var opt CompletionOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-
+// buildOpenAIBody constructs the JSON request body for OpenAI-compat completions.
+func (p *openaiCompatProvider) buildOpenAIBody(messages []Message, opt CompletionOptions, stream bool) ([]byte, error) {
 	reqMap := map[string]interface{}{
 		"model":    p.cfg.Model,
 		"messages": messages,
-		"stream":   false,
+		"stream":   stream,
 	}
-
 	if opt.MaxTokens > 0 {
 		reqMap["max_tokens"] = opt.MaxTokens
 	}
 	if opt.Temperature > 0 {
 		reqMap["temperature"] = opt.Temperature
 	}
-
-	// Add reasoning_effort only for OpenAI endpoints that support it.
 	if p.supportsReasoningEffort() && opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
-		effort := openaiReasoningEffort(opt.ThinkingLevel)
-		if effort != "" {
+		if effort := openaiReasoningEffort(opt.ThinkingLevel); effort != "" {
 			reqMap["reasoning_effort"] = effort
 		}
 	}
+	return json.Marshal(reqMap)
+}
 
-	body, err := json.Marshal(reqMap)
+// CompleteStream implements TokenStreamer using OpenAI SSE format.
+func (p *openaiCompatProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	body, err := p.buildOpenAIBody(messages, opt, true)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	headers := map[string]string{
+		"Authorization": "Bearer " + p.cfg.APIKey,
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, p.cfg.BaseURL+"/chat/completions", headers, body, func(e SSEEvent) {
+		if e.Data == "[DONE]" {
+			return
+		}
+		if token, ok := ParseOpenAISSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("openai stream: %w", err)
+	}
+	result := full.String()
+	if result == "" {
+		return "", fmt.Errorf("empty streaming response from openai-compat")
+	}
+	return result, nil
+}
+
+func (p *openaiCompatProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	body, err := p.buildOpenAIBody(messages, opt, false)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}

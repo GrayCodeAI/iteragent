@@ -26,7 +26,11 @@ type SkillSet struct {
 
 // LoadSkills scans dirs for skill subdirectories. For each subdirectory it looks
 // for SKILL.md (AgentSkills standard) first, then falls back to skill.md.
+// Skills are deduplicated by name; the last directory in the list wins,
+// so callers can override built-in skills by appending their own dirs.
 func LoadSkills(dirs []string) (*SkillSet, error) {
+	// Use an ordered map: name → skill, preserving insertion order for stable output.
+	seen := map[string]int{} // name → index in skills slice
 	var skills []Skill
 
 	for _, dir := range dirs {
@@ -67,13 +71,21 @@ func LoadSkills(dirs []string) (*SkillSet, error) {
 				name = entry.Name()
 			}
 
-			skills = append(skills, Skill{
+			skill := Skill{
 				Name:           name,
 				Description:    desc,
 				Content:        body,
 				RawFrontmatter: frontmatter,
 				Path:           skillPath,
-			})
+			}
+
+			// Deduplicate: later dirs override earlier ones (last-writer-wins).
+			if idx, exists := seen[name]; exists {
+				skills[idx] = skill
+			} else {
+				seen[name] = len(skills)
+				skills = append(skills, skill)
+			}
 		}
 	}
 

@@ -163,6 +163,70 @@ func (p *VertexProvider) Complete(ctx context.Context, messages []Message, opts 
 	return strings.Join(texts, ""), nil
 }
 
+// CompleteStream implements TokenStreamer for Vertex AI using the streamGenerateContent SSE endpoint.
+func (p *VertexProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	location := p.config.Location
+	if location == "" {
+		location = "us-central1"
+	}
+	streamURL := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:streamGenerateContent",
+		location, p.config.ProjectID, location, p.config.Model)
+
+	accessToken, err := p.getAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var system string
+	var contents []map[string]interface{}
+	for _, m := range messages {
+		if m.Role == "system" {
+			system = m.Content
+		} else {
+			role := "user"
+			if m.Role == "assistant" {
+				role = "model"
+			}
+			contents = append(contents, map[string]interface{}{
+				"role":  role,
+				"parts": []map[string]string{{"text": m.Content}},
+			})
+		}
+	}
+	body := map[string]interface{}{"contents": contents}
+	if system != "" {
+		body["systemInstruction"] = map[string]interface{}{
+			"parts": []map[string]string{{"text": system}},
+		}
+	}
+	if opt.MaxTokens > 0 {
+		body["maxOutputTokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		body["temperature"] = opt.Temperature
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, streamURL, map[string]string{"Authorization": "Bearer " + accessToken}, jsonBody, func(e SSEEvent) {
+		if tok, ok := ParseGeminiSSE(e.Data); ok && tok != "" {
+			full.WriteString(tok)
+			if onToken != nil {
+				onToken(tok)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("vertex stream: %w", err)
+	}
+	result := full.String()
+	if result == "" {
+		return "", fmt.Errorf("empty streaming response from vertex")
+	}
+	return result, nil
+}
+
 func (p *VertexProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
 	location := p.config.Location
 	if location == "" {

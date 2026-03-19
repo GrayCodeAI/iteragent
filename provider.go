@@ -23,6 +23,16 @@ type Provider interface {
 	Name() string
 }
 
+// TokenStreamer is an optional interface providers can implement to deliver
+// incremental token output. When a provider implements this interface the
+// agent will call CompleteStream instead of Complete, enabling real-time
+// token-by-token streaming to the UI.
+type TokenStreamer interface {
+	// CompleteStream performs a completion and calls onToken for each text
+	// token as it arrives. Returns the full concatenated response.
+	CompleteStream(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(token string)) (string, error)
+}
+
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
 // Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode (default: gemini)
 // If apiKey is provided, it takes priority over environment variables.

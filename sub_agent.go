@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 )
 
 type SubAgent struct {
@@ -40,61 +39,23 @@ func NewSubAgent(cfg SubAgentConfig, logger *slog.Logger) *SubAgent {
 	return &SubAgent{
 		Name:         cfg.Name,
 		SystemPrompt: cfg.SystemPrompt,
+		MaxTurns:     cfg.MaxTurns,
 		Agent:        agent,
 	}
 }
 
+// WithMaxTurns sets the maximum number of tool-call iterations before the
+// sub-agent stops. A value of 0 means use the default (20 iterations).
+// The limit is stored on the SubAgent and consulted at Run time.
+func (s *SubAgent) WithMaxTurns(n int) *SubAgent {
+	s.MaxTurns = n
+	return s
+}
+
+// Run executes the sub-agent on the given task. It delegates to the embedded
+// Agent so that TokenStreamer, hooks, and context compaction all apply.
 func (s *SubAgent) Run(ctx context.Context, task string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: s.SystemPrompt},
-		{Role: "user", Content: task},
-	}
-
-	var result strings.Builder
-	turns := 0
-	maxTurns := 20
-
-	for turns < maxTurns {
-		turns++
-
-		response, err := s.Provider.Complete(ctx, messages)
-		if err != nil {
-			return "", fmt.Errorf("sub-agent error at turn %d: %w", turns, err)
-		}
-
-		result.WriteString(response + "\n")
-
-		calls := ParseToolCalls(response)
-		if len(calls) == 0 {
-			return response, nil
-		}
-
-		for _, call := range calls {
-			tool, ok := s.Tools[call.Tool]
-			if !ok {
-				result.WriteString(fmt.Sprintf("unknown tool: %s\n", call.Tool))
-				continue
-			}
-
-			toolResult, err := tool.Execute(ctx, call.Args)
-			if err != nil {
-				toolResult = fmt.Sprintf("ERROR: %s", err.Error())
-			}
-
-			result.WriteString(fmt.Sprintf("[%s result]: %s\n", call.Tool, toolResult))
-
-			messages = append(messages, Message{
-				Role:    "assistant",
-				Content: response,
-			})
-			messages = append(messages, Message{
-				Role:    "user",
-				Content: toolResult,
-			})
-		}
-	}
-
-	return result.String(), fmt.Errorf("sub-agent exceeded max turns (%d)", maxTurns)
+	return s.Agent.Run(ctx, s.SystemPrompt, task)
 }
 
 type SubAgentPool struct {

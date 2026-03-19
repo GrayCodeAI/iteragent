@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type anthropicProvider struct {
 }
 
 // NewAnthropic returns a native Anthropic provider.
+// The returned provider implements both Provider and TokenStreamer.
 func NewAnthropic(cfg AnthropicConfig) Provider {
 	return &anthropicProvider{
 		cfg:    cfg,
@@ -58,12 +60,8 @@ func thinkingBudget(level ThinkingLevel) int {
 	}
 }
 
-func (p *anthropicProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
-	var opt CompletionOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-
+// buildAnthropicBody constructs the JSON request body for Anthropic completions.
+func (p *anthropicProvider) buildAnthropicBody(messages []Message, opt CompletionOptions, stream bool) ([]byte, error) {
 	var system string
 	var filtered []Message
 	for _, m := range messages {
@@ -73,46 +71,80 @@ func (p *anthropicProvider) Complete(ctx context.Context, messages []Message, op
 			filtered = append(filtered, m)
 		}
 	}
-
 	maxTokens := 4096
 	if opt.MaxTokens > 0 {
 		maxTokens = opt.MaxTokens
 	}
-
 	reqMap := map[string]interface{}{
 		"model":      p.cfg.Model,
 		"max_tokens": maxTokens,
 		"messages":   filtered,
 	}
-
-	// System prompt: use cache_control breakpoint when caching is enabled.
+	if stream {
+		reqMap["stream"] = true
+	}
+	cacheEnabled := opt.CacheConfig != nil && opt.CacheConfig.Enabled && opt.CacheConfig.CacheSystem
 	if system != "" {
-		cacheEnabled := opt.CacheConfig != nil && opt.CacheConfig.Enabled && opt.CacheConfig.CacheSystem
 		if cacheEnabled {
 			reqMap["system"] = []map[string]interface{}{
-				{
-					"type": "text",
-					"text": system,
-					"cache_control": map[string]string{
-						"type": "ephemeral",
-					},
-				},
+				{"type": "text", "text": system, "cache_control": map[string]string{"type": "ephemeral"}},
 			}
 		} else {
 			reqMap["system"] = system
 		}
 	}
-
-	// Add thinking config if enabled.
 	if opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
 		budget := thinkingBudget(opt.ThinkingLevel)
 		reqMap["thinking"] = map[string]interface{}{
-			"type":          "enabled",
-			"budget_tokens": budget,
+			"type": "enabled", "budget_tokens": budget,
 		}
 	}
+	return json.Marshal(reqMap)
+}
 
-	body, err := json.Marshal(reqMap)
+// CompleteStream implements TokenStreamer. It uses SSE to deliver tokens
+// incrementally via onToken as they arrive from the Anthropic API.
+func (p *anthropicProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	body, err := p.buildAnthropicBody(messages, opt, true)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	headers := map[string]string{
+		"x-api-key":         p.cfg.APIKey,
+		"anthropic-version": "2023-06-01",
+	}
+	if opt.CacheConfig != nil && opt.CacheConfig.Enabled {
+		headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, "https://api.anthropic.com/v1/messages", headers, body, func(e SSEEvent) {
+		if token, ok := ParseAnthropicSSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("anthropic stream: %w", err)
+	}
+	result := full.String()
+	if result == "" {
+		return "", fmt.Errorf("empty streaming response from anthropic")
+	}
+	return result, nil
+}
+
+func (p *anthropicProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	body, err := p.buildAnthropicBody(messages, opt, false)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}

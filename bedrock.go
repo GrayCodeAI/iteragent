@@ -122,6 +122,21 @@ func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts
 	return response.Output.Message.Content[0].Text, nil
 }
 
+// CompleteStream implements TokenStreamer for Bedrock. Bedrock's streaming API uses
+// HTTP/2 binary event framing which requires the AWS SDK to decode correctly.
+// As a pragmatic fallback, this calls Complete and delivers the full response as
+// a single token so the agent loop still benefits from retry logic.
+func (p *BedrockProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	result, err := p.Complete(ctx, messages, opt)
+	if err != nil {
+		return "", err
+	}
+	if onToken != nil {
+		onToken(result)
+	}
+	return result, nil
+}
+
 func (p *BedrockProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
 	url := fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse",
 		p.config.Region, p.config.Model)

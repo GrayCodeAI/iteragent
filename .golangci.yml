@@ -1,0 +1,43 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck      # check unchecked errors
+    - gosimple      # simplification suggestions
+    - govet         # go vet checks
+    - ineffassign   # detect unused assignments
+    - staticcheck   # comprehensive static analysis
+    - unused        # detect unused code
+    - gofmt         # enforce formatting
+    - goimports     # enforce import ordering
+    - misspell      # fix common spelling mistakes
+    - revive        # opinionated linter (replaces golint)
+    - bodyclose     # ensure http response bodies are closed
+    - contextcheck  # check context propagation
+    - noctx         # disallow http.NewRequest without context
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        disabled: true   # don't require doc comments on every export
+      - name: unused-parameter
+        disabled: true   # too noisy for callback-heavy code
+
+  errcheck:
+    # Ignore common intentional unchecked errors.
+    ignore: fmt:.*,io/fs:PathError
+
+issues:
+  exclude-rules:
+    # Test files: relax some rules.
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+        - bodyclose
+    # Example files: formatting/import issues are expected.
+    - path: "examples/"
+      linters:
+        - goimports
+        - revive

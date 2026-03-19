@@ -244,6 +244,7 @@ const (
 	EventInputRejected       EventType = "input_rejected"
 	EventInputWarned         EventType = "input_warned"
 	EventContextCompacted    EventType = "context_compacted"
+	EventTokenUpdate         EventType = "token_update" // incremental token from streaming provider
 	EventError               EventType = "error"
 )
 

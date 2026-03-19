@@ -144,6 +144,51 @@ func (p *OpenAIResponsesProvider) Complete(ctx context.Context, messages []Messa
 	return result.String(), nil
 }
 
+// CompleteStream implements TokenStreamer for the OpenAI Responses API.
+// It uses the response.content_part.delta SSE event to deliver text tokens incrementally.
+func (p *OpenAIResponsesProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	baseURL := p.config.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	url := baseURL + "/responses"
+
+	maxTokens := p.config.MaxTokens
+	if opt.MaxTokens > 0 {
+		maxTokens = opt.MaxTokens
+	}
+	temperature := p.config.Temperature
+	if opt.Temperature > 0 {
+		temperature = opt.Temperature
+	}
+	body := responsesRequest{
+		Model:       p.config.Model,
+		Input:       messagesToResponsesFormat(messages),
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
+		Store:       false,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, url, map[string]string{"Authorization": "Bearer " + p.config.APIKey}, jsonBody, func(e SSEEvent) {
+		if token, ok := ParseOpenAIResponsesSSE(e); ok {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("openai responses stream: %w", err)
+	}
+	return full.String(), nil
+}
+
 func (p *OpenAIResponsesProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
 	baseURL := p.config.BaseURL
 	if baseURL == "" {

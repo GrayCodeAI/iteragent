@@ -139,27 +139,26 @@ func (r *SSEResponse) IsStopped() bool {
 	return r.stopped
 }
 
+// ParseAnthropicSSE extracts the incremental text token from an Anthropic
+// streaming SSE data payload. Returns ("", false) for non-text events.
+//
+// Anthropic SSE format for text tokens:
+//
+//	{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
 func ParseAnthropicSSE(data string) (string, bool) {
 	var event struct {
 		Type  string `json:"type"`
-		Delta string `json:"delta"`
-		Text  string `json:"text"`
-		Index int    `json:"index"`
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
 	}
-
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		return "", false
 	}
-
-	switch event.Type {
-	case "content_block_delta":
-		if event.Delta != "" {
-			return event.Delta, true
-		}
-	case "message_delta":
-		return event.Text, true
+	if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" && event.Delta.Text != "" {
+		return event.Delta.Text, true
 	}
-
 	return "", false
 }
 
@@ -180,6 +179,31 @@ func ParseOpenAISSE(data string) (string, bool) {
 		return event.Choices[0].Delta.Content, true
 	}
 
+	return "", false
+}
+
+// ParseOpenAIResponsesSSE extracts text tokens from the OpenAI Responses API SSE stream.
+//
+// Responses API streaming event format:
+//
+//	event: response.content_part.delta
+//	data: {"type":"response.content_part.delta","delta":{"type":"text","text":"Hello"}}
+func ParseOpenAIResponsesSSE(e SSEEvent) (string, bool) {
+	if e.Event != "response.content_part.delta" {
+		return "", false
+	}
+	var payload struct {
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
+		return "", false
+	}
+	if payload.Delta.Type == "text" && payload.Delta.Text != "" {
+		return payload.Delta.Text, true
+	}
 	return "", false
 }
 

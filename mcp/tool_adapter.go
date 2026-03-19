@@ -35,6 +35,13 @@ func NewMcpToolAdapter(client *McpClient) *ToolAdapter {
 	return &ToolAdapter{client: client}
 }
 
+// Client returns the underlying *McpClient if the adapter was created with one,
+// or nil if it was created from a legacy HTTP Client. Used by Agent.Close().
+func (a *ToolAdapter) Client() *McpClient {
+	mc, _ := a.client.(*McpClient)
+	return mc
+}
+
 // GetTools fetches the tool list from the MCP server and wraps each tool for use
 // as an iteragent ExecutableTool.
 func (a *ToolAdapter) GetTools(ctx context.Context) ([]ExecutableTool, error) {

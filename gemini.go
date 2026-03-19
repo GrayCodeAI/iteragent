@@ -23,6 +23,7 @@ type geminiProvider struct {
 }
 
 // NewGemini returns a Google Gemini provider.
+// The returned provider implements both Provider and TokenStreamer.
 func NewGemini(cfg GeminiConfig) Provider {
 	return &geminiProvider{
 		cfg:    cfg,
@@ -63,12 +64,8 @@ func geminiThinkingBudget(level ThinkingLevel) int {
 	}
 }
 
-func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
-	var opt CompletionOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-
+// buildGeminiBody constructs the JSON request body for Gemini completions.
+func (p *geminiProvider) buildGeminiBody(messages []Message, opt CompletionOptions) ([]byte, error) {
 	var system string
 	var contents []string
 	for _, m := range messages {
@@ -79,15 +76,12 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts 
 		}
 	}
 
-	// Build request as a generic map to support optional fields.
 	reqMap := map[string]interface{}{}
-
 	if system != "" {
 		reqMap["systemInstruction"] = map[string]interface{}{
 			"parts": []map[string]string{{"text": system}},
 		}
 	}
-
 	var contentsSlice []map[string]interface{}
 	for _, c := range contents {
 		contentsSlice = append(contentsSlice, map[string]interface{}{
@@ -96,7 +90,6 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts 
 	}
 	reqMap["contents"] = contentsSlice
 
-	// Add generationConfig including thinkingConfig if enabled.
 	genConfig := map[string]interface{}{}
 	if opt.MaxTokens > 0 {
 		genConfig["maxOutputTokens"] = opt.MaxTokens
@@ -113,8 +106,47 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts 
 	if len(genConfig) > 0 {
 		reqMap["generationConfig"] = genConfig
 	}
+	return json.Marshal(reqMap)
+}
 
-	body, err := json.Marshal(reqMap)
+// CompleteStream implements TokenStreamer using the Gemini streaming endpoint.
+func (p *geminiProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
+	body, err := p.buildGeminiBody(messages, opt)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	streamURL := fmt.Sprintf(
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?key=%s&alt=sse",
+		p.cfg.Model, p.cfg.APIKey)
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, streamURL, nil, body, func(e SSEEvent) {
+		if token, ok := ParseGeminiSSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("gemini stream: %w", err)
+	}
+	result := full.String()
+	if result == "" {
+		return "", fmt.Errorf("empty streaming response from gemini")
+	}
+	return result, nil
+}
+
+func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	body, err := p.buildGeminiBody(messages, opt)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}

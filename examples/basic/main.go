@@ -1,4 +1,4 @@
-// basic — minimal iteragent example.
+// basic — minimal iteragent example demonstrating streaming tokens and lifecycle hooks.
 //
 // Usage:
 //
@@ -10,17 +10,17 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
+	"time"
 
 	"github.com/GrayCodeAI/iteragent"
-	"log/slog"
 )
 
 func main() {
 	// Auto-detect provider from environment variables.
 	providerName := os.Getenv("ITERATE_PROVIDER")
 	if providerName == "" {
-		// Default: try Anthropic first, then Gemini.
 		if os.Getenv("ANTHROPIC_API_KEY") != "" {
 			providerName = "anthropic"
 		} else {
@@ -35,20 +35,58 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
+	// Lifecycle hooks: log turn timing and tool calls.
+	var turnStart time.Time
+	hooks := iteragent.AgentHooks{
+		BeforeTurn: func(turn int, messages []iteragent.Message) {
+			turnStart = time.Now()
+			fmt.Printf("[hook] turn %d start (%d messages)\n", turn, len(messages))
+		},
+		AfterTurn: func(turn int, response string) {
+			fmt.Printf("[hook] turn %d done in %s\n", turn, time.Since(turnStart).Round(time.Millisecond))
+		},
+		OnToolStart: func(toolName string, args map[string]string) {
+			fmt.Printf("[hook] → tool %s\n", toolName)
+		},
+		OnToolEnd: func(toolName string, result string, err error) {
+			if err != nil {
+				fmt.Printf("[hook] ← tool %s error: %v\n", toolName, err)
+			} else {
+				fmt.Printf("[hook] ← tool %s ok (%d chars)\n", toolName, len(result))
+			}
+		},
+	}
+
 	a := iteragent.New(p, iteragent.DefaultTools("."), logger).
-		WithSystemPrompt("You are a helpful coding assistant. Answer concisely.")
+		WithSystemPrompt("You are a helpful coding assistant. Answer concisely.").
+		WithHooks(hooks)
+
+	// Close shuts down any MCP server connections when we're done.
+	defer func() {
+		if err := a.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close: %v\n", err)
+		}
+	}()
 
 	fmt.Printf("Provider: %s\n\n", p.Name())
 
 	ctx := context.Background()
 	question := "What is 2 + 2? Reply with just the number."
+	fmt.Printf("Q: %s\nA: ", question)
 
-	fmt.Printf("Q: %s\n", question)
-
-	out, err := a.Run(ctx, "", question)
-	if err != nil {
-		log.Fatalf("run: %v", err)
+	// Stream tokens live as they arrive via EventTokenUpdate.
+	var tokenCount int
+	events := a.Prompt(ctx, question)
+	for e := range events {
+		switch iteragent.EventType(e.Type) {
+		case iteragent.EventTokenUpdate:
+			fmt.Print(e.Content)
+			tokenCount++
+		case iteragent.EventError:
+			fmt.Fprintf(os.Stderr, "\nerror: %s\n", e.Content)
+		}
 	}
+	a.Finish()
 
-	fmt.Printf("A: %s\n", out)
+	fmt.Printf("\n\n(%d token chunks streamed)\n", tokenCount)
 }
