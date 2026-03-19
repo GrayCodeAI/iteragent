@@ -140,7 +140,7 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		model := getEnvOr("ITERATE_MODEL", "nemotron-3-super-free")
 		model = strings.TrimPrefix(model, "opencode/")
 		return NewOpenAICompat(OpenAICompatConfig{
-			BaseURL: "https://opencode.ai/zen/v1",
+			BaseURL: getEnvOr("OPENCODE_BASE_URL", "https://opencode.ai/go/v1"),
 			Model:   model,
 			APIKey:  key,
 		}), nil
