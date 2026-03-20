@@ -11,6 +11,45 @@ import (
 	"time"
 )
 
+var protectedPaths []string
+
+var dangerousPatterns = []string{
+	"rm -rf",
+	"git push --force",
+	"git push -f",
+	"--force-with-lease",
+	"chmod -R 777",
+	"> /etc/",
+	"curl .* | sh",
+	"wget .* | sh",
+}
+
+func SetProtectedPaths(paths []string) {
+	protectedPaths = paths
+}
+
+func GetProtectedPaths() []string {
+	return protectedPaths
+}
+
+func isPathProtected(path string) bool {
+	for _, p := range protectedPaths {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCommandDangerous(cmd string) bool {
+	for _, pattern := range dangerousPatterns {
+		if strings.Contains(cmd, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultTools returns all built-in tools available to the agent.
 func DefaultTools(repoPath string) []Tool {
 	return []Tool{
@@ -35,6 +74,9 @@ func BashTool(repoPath string) Tool {
 			cmd := args["cmd"]
 			if cmd == "" {
 				return "", fmt.Errorf("cmd is required")
+			}
+			if isCommandDangerous(cmd) {
+				return "", fmt.Errorf("command contains dangerous pattern: %s", cmd)
 			}
 			ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
@@ -71,6 +113,9 @@ func WriteFileTool(repoPath string) Tool {
 		Description: "Write or overwrite a file in the repo.\nArgs: {\"path\": \"internal/agent/agent.go\", \"content\": \"...\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
 			path := filepath.Join(repoPath, args["path"])
+			if isPathProtected(path) {
+				return "", fmt.Errorf("write to %s is protected", args["path"])
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return "", err
 			}
@@ -88,6 +133,9 @@ func EditFileTool(repoPath string) Tool {
 		Description: "Edit a file by replacing oldString with newString.\nArgs: {\"path\": \"file.go\", \"oldString\": \"old\", \"newString\": \"new\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
 			path := filepath.Join(repoPath, args["path"])
+			if isPathProtected(path) {
+				return "", fmt.Errorf("edit %s is protected", args["path"])
+			}
 			oldStr := args["oldString"]
 			newStr := args["newString"]
 			if oldStr == "" {
