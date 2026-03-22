@@ -34,8 +34,11 @@ type TokenStreamer interface {
 }
 
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
-// Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode (default: gemini)
+// Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode, opencode-cli (default: gemini)
 // If apiKey is provided, it takes priority over environment variables.
+// 
+// opencode-cli uses the OpenCode CLI internally, enabling access to free models
+// like mimo-v2-pro-free without requiring a public REST API.
 func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 	providedKey := ""
 	if len(apiKey) > 0 {
@@ -137,12 +140,20 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 		if key == "" {
 			return nil, fmt.Errorf("OPENCODE_API_KEY is required for opencode provider (or use --api-key)")
 		}
-		model := getEnvOr("ITERATE_MODEL", "nemotron-3-super-free")
+		model := getEnvOr("ITERATE_MODEL", "mimo-v2-pro-free")
 		model = strings.TrimPrefix(model, "opencode/")
 		return NewOpenAICompat(OpenAICompatConfig{
-			BaseURL: getEnvOr("OPENCODE_BASE_URL", "https://opencode.ai/zen/go/v1"),
+			BaseURL: getEnvOr("OPENCODE_BASE_URL", "https://api.opencode.ai/v1"),
 			Model:   model,
 			APIKey:  key,
+		}), nil
+
+	case "opencode-cli":
+		// Uses OpenCode CLI internally - enables free model access
+		model := getEnvOr("ITERATE_MODEL", "mimo-v2-pro-free")
+		model = strings.TrimPrefix(model, "opencode/")
+		return NewOpenCodeCLI(OpenCodeCLIConfig{
+			Model: model,
 		}), nil
 
 	default:
