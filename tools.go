@@ -50,6 +50,24 @@ func isCommandDangerous(cmd string) bool {
 	return false
 }
 
+// safeJoin joins repoPath with the user-supplied relative path and ensures the
+// result stays within repoPath, preventing path traversal attacks.
+func safeJoin(repoPath, rel string) (string, error) {
+	joined := filepath.Join(repoPath, rel)
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid repo path: %w", err)
+	}
+	absJoined, err := filepath.Abs(joined)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+	if !strings.HasPrefix(absJoined, absRepo+string(filepath.Separator)) && absJoined != absRepo {
+		return "", fmt.Errorf("path %q is outside the repository", rel)
+	}
+	return absJoined, nil
+}
+
 // DefaultTools returns all built-in tools available to the agent.
 func DefaultTools(repoPath string) []Tool {
 	return []Tool{
@@ -86,8 +104,8 @@ func BashTool(repoPath string) Tool {
 			var out bytes.Buffer
 			c.Stdout = &out
 			c.Stderr = &out
-			_ = c.Run()
-			return out.String(), nil
+			err := c.Run()
+			return out.String(), err
 		},
 	}
 }
@@ -97,7 +115,10 @@ func ReadFileTool(repoPath string) Tool {
 		Name:        "read_file",
 		Description: "Read a file from the repo.\nArgs: {\"path\": \"internal/agent/agent.go\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path := filepath.Join(repoPath, args["path"])
+			path, err := safeJoin(repoPath, args["path"])
+			if err != nil {
+				return "", err
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return "", fmt.Errorf("read %s: %w", args["path"], err)
@@ -112,7 +133,10 @@ func WriteFileTool(repoPath string) Tool {
 		Name:        "write_file",
 		Description: "Write or overwrite a file in the repo.\nArgs: {\"path\": \"internal/agent/agent.go\", \"content\": \"...\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path := filepath.Join(repoPath, args["path"])
+			path, err := safeJoin(repoPath, args["path"])
+			if err != nil {
+				return "", err
+			}
 			if isPathProtected(path) {
 				return "", fmt.Errorf("write to %s is protected", args["path"])
 			}
@@ -132,7 +156,10 @@ func EditFileTool(repoPath string) Tool {
 		Name:        "edit_file",
 		Description: "Edit a file by replacing oldString with newString.\nArgs: {\"path\": \"file.go\", \"oldString\": \"old\", \"newString\": \"new\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path := filepath.Join(repoPath, args["path"])
+			path, err := safeJoin(repoPath, args["path"])
+			if err != nil {
+				return "", err
+			}
 			if isPathProtected(path) {
 				return "", fmt.Errorf("edit %s is protected", args["path"])
 			}
@@ -194,7 +221,11 @@ func SearchTool(repoPath string) Tool {
 			}
 			path := repoPath
 			if args["path"] != "" {
-				path = filepath.Join(repoPath, args["path"])
+				var err error
+				path, err = safeJoin(repoPath, args["path"])
+				if err != nil {
+					return "", err
+				}
 			}
 
 			c := exec.CommandContext(ctx, "grep", "-r", "-n", pattern, path)

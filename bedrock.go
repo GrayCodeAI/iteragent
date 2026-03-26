@@ -77,7 +77,10 @@ func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts
 		body["temperature"] = p.config.Temperature
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
@@ -95,7 +98,10 @@ func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("Bedrock error (%d): %s", resp.StatusCode, string(respBody))

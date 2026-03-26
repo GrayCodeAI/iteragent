@@ -205,7 +205,10 @@ func (p *OpenAIResponsesProvider) Stream(ctx context.Context, config StreamConfi
 		Store:       false,
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return Message{}, fmt.Errorf("marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
@@ -223,7 +226,7 @@ func (p *OpenAIResponsesProvider) Stream(ctx context.Context, config StreamConfi
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body) // best-effort for error message
 		return Message{}, fmt.Errorf("OpenAI Responses API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 

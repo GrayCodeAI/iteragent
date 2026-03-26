@@ -54,7 +54,7 @@ func (p *VertexProvider) getAccessToken(ctx context.Context) (string, error) {
 		if err := json.Unmarshal(data, &creds); err != nil {
 			return "", err
 		}
-		return "dummy_token_from_service_account", nil
+		return "", fmt.Errorf("service account credentials file found but JWT signing is not implemented; set GOOGLE_ACCESS_TOKEN instead")
 	}
 
 	tokenSrc := os.Getenv("GOOGLE_ACCESS_TOKEN")
