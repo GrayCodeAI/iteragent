@@ -310,10 +310,12 @@ func CompactMessagesTiered(messages []Message, cfg ContextConfig) []Message {
 			var summary string
 			if len(calls) > 0 {
 				summary = fmt.Sprintf("[Assistant used %d tool(s)]", len(calls))
-			} else if len(msg.Content) > 200 {
-				summary = msg.Content[:200]
 			} else {
-				summary = msg.Content
+				if len(msg.Content) > 200 {
+					summary = msg.Content[:200]
+				} else {
+					summary = msg.Content
+				}
 			}
 			compacted = append(compacted, Message{Role: "assistant", Content: summary})
 			// Skip adjacent tool result messages.

@@ -41,7 +41,7 @@ func ConnectHTTP(ctx context.Context, url string, headers map[string]string) (*M
 
 // initialize performs the MCP initialize handshake.
 func (c *McpClient) initialize(ctx context.Context) error {
-	params, _ := json.Marshal(map[string]interface{}{
+	params, err := json.Marshal(map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]interface{}{},
 		"clientInfo": map[string]interface{}{
@@ -49,13 +49,16 @@ func (c *McpClient) initialize(ctx context.Context) error {
 			"version": "0.1.0",
 		},
 	})
+	if err != nil {
+		return fmt.Errorf("marshal initialize params: %w", err)
+	}
 	req := JsonRpcRequest{
 		JSONRPC: "2.0",
 		Method:  "initialize",
 		Params:  params,
 	}
-	_, err := c.Transport.Send(ctx, req)
-	return err
+	_, sendErr := c.Transport.Send(ctx, req)
+	return sendErr
 }
 
 // ListTools returns the list of tools advertised by the MCP server.
@@ -82,10 +85,13 @@ func (c *McpClient) ListTools(ctx context.Context) ([]Tool, error) {
 
 // CallTool invokes a tool by name with the given arguments.
 func (c *McpClient) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
-	paramsRaw, _ := json.Marshal(map[string]interface{}{
+	paramsRaw, err := json.Marshal(map[string]interface{}{
 		"name":      name,
 		"arguments": args,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal call params: %w", err)
+	}
 	req := JsonRpcRequest{
 		JSONRPC: "2.0",
 		Method:  "tools/call",

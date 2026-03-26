@@ -201,7 +201,7 @@ func (p *AzureOpenAIProvider) Stream(ctx context.Context, config StreamConfig, m
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body) // best-effort for error message
 		return Message{}, fmt.Errorf("Azure OpenAI error (%d): %s", resp.StatusCode, string(respBody))
 	}
 

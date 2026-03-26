@@ -371,7 +371,8 @@ func (a *Adapter) callOperation(ctx context.Context, path, method string, op *Op
 		case "query":
 			queryParams = append(queryParams, fmt.Sprintf("%s=%s", url.QueryEscape(param.Name), url.QueryEscape(val)))
 		case "path":
-			u = strings.ReplaceAll(u, "{"+param.Name+"}", val)
+			// Use exact token replacement to avoid partial matches (e.g. {id} vs {id_extra}).
+			u = strings.ReplaceAll(u, "{"+param.Name+"}", url.PathEscape(val))
 		}
 	}
 
@@ -381,7 +382,10 @@ func (a *Adapter) callOperation(ctx context.Context, path, method string, op *Op
 
 	var bodyReader io.Reader
 	if op.RequestBody != nil {
-		bodyData, _ := json.Marshal(args)
+		bodyData, err := json.Marshal(args)
+		if err != nil {
+			return "", fmt.Errorf("marshal request body: %w", err)
+		}
 		bodyReader = strings.NewReader(string(bodyData))
 	} else {
 		bodyReader = strings.NewReader("")

@@ -235,7 +235,8 @@ func (p *BedrockProvider) signRequest(req *http.Request, payload string) {
 
 	host := req.Host
 	if host == "" {
-		host = strings.Split(strings.Split(req.URL.Host, ":")[0], ".")[0]
+		// Strip port if present, use full hostname (not just first segment).
+		host = req.URL.Hostname()
 	}
 
 	hashedPayload := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
