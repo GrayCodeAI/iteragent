@@ -35,14 +35,14 @@ func TestAgentSimpleResponse(t *testing.T) {
 func TestAgentToolCall(t *testing.T) {
 	toolCall := iteragent.ToolCall{
 		Tool: "echo",
-		Args: map[string]string{"msg": "ping"},
+		Args: map[string]interface{}{"msg": "ping"},
 	}
 
 	called := false
 	echoTool := iteragent.Tool{
 		Name:        "echo",
 		Description: "Echo the msg argument",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			called = true
 			return "pong", nil
 		},
@@ -127,6 +127,57 @@ func TestParseToolCallsNone(t *testing.T) {
 	calls := iteragent.ParseToolCalls("just some text with no tool calls")
 	if len(calls) != 0 {
 		t.Errorf("expected 0 calls, got %d", len(calls))
+	}
+}
+
+// TestParseToolCallsMalformedJSON verifies that truncated/malformed tool blocks
+// are recovered where possible and silently dropped when unrecoverable.
+func TestParseToolCallsMalformedJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantN   int
+		wantTool string
+	}{
+		{
+			name:     "truncated after tool value",
+			input:    "```tool\n{\"tool\":\"bash\",\"args\":{\"command\":\"ls\"\n```",
+			wantN:    1,
+			wantTool: "bash",
+		},
+		{
+			name:     "missing outer closing brace",
+			input:    "```tool\n{\"tool\":\"read_file\",\"args\":{\"path\":\"/tmp/x\"}\n```",
+			wantN:    1,
+			wantTool: "read_file",
+		},
+		{
+			name:  "completely invalid JSON",
+			input: "```tool\nnot json at all\n```",
+			wantN: 0,
+		},
+		{
+			name:  "empty block",
+			input: "```tool\n\n```",
+			wantN: 0,
+		},
+		{
+			name:     "trailing garbage after closing brace",
+			input:    "```tool\n{\"tool\":\"bash\",\"args\":{\"command\":\"ls\"}} extra stuff\n```",
+			wantN:    1,
+			wantTool: "bash",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := iteragent.ParseToolCalls(tc.input)
+			if len(calls) != tc.wantN {
+				t.Fatalf("want %d calls, got %d", tc.wantN, len(calls))
+			}
+			if tc.wantN > 0 && calls[0].Tool != tc.wantTool {
+				t.Errorf("want tool=%q, got %q", tc.wantTool, calls[0].Tool)
+			}
+		})
 	}
 }
 
@@ -226,13 +277,13 @@ func TestAgentHooks_BeforeAfterTurn(t *testing.T) {
 func TestAgentHooks_OnToolStartEnd(t *testing.T) {
 	toolCall := iteragent.ToolCall{
 		Tool: "greet",
-		Args: map[string]string{"name": "world"},
+		Args: map[string]interface{}{"name": "world"},
 	}
 	greetTool := iteragent.Tool{
 		Name:        "greet",
 		Description: "Greet someone",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			return "hello " + args["name"], nil
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "hello " + iteragent.ArgStr(args, "name"), nil
 		},
 	}
 
@@ -243,10 +294,10 @@ func TestAgentHooks_OnToolStartEnd(t *testing.T) {
 	var endResults []string
 	var endErrors []error
 	a.WithHooks(iteragent.AgentHooks{
-		OnToolStart: func(toolName string, args map[string]string) {
+		OnToolStart: func(toolName string, args map[string]interface{}) {
 			startTools = append(startTools, toolName)
-			if args["name"] != "world" {
-				t.Errorf("OnToolStart: args[name]=%q, want %q", args["name"], "world")
+			if iteragent.ArgStr(args, "name") != "world" {
+				t.Errorf("OnToolStart: args[name]=%q, want %q", iteragent.ArgStr(args, "name"), "world")
 			}
 		},
 		OnToolEnd: func(toolName string, result string, err error) {
@@ -357,10 +408,10 @@ func TestAgentTokenStreamer_RunReturnsFullResponse(t *testing.T) {
 // call precedes the final response. The mock streams every turn, so we verify
 // that EventTokenUpdate events were emitted and the final answer is correct.
 func TestAgentTokenStreamer_WithTools(t *testing.T) {
-	toolCall := iteragent.ToolCall{Tool: "noop", Args: map[string]string{}}
+	toolCall := iteragent.ToolCall{Tool: "noop", Args: map[string]interface{}{}}
 	noopTool := iteragent.Tool{
 		Name: "noop",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return "done", nil
 		},
 	}
@@ -421,13 +472,13 @@ func TestAgentClose(t *testing.T) {
 // when the parallel execution strategy is used.
 func TestAgentHooks_Parallel(t *testing.T) {
 	calls := []iteragent.ToolCall{
-		{Tool: "t1", Args: map[string]string{}},
-		{Tool: "t2", Args: map[string]string{}},
+		{Tool: "t1", Args: map[string]interface{}{}},
+		{Tool: "t2", Args: map[string]interface{}{}},
 	}
 	makeTool := func(name string) iteragent.Tool {
 		return iteragent.Tool{
 			Name: name,
-			Execute: func(ctx context.Context, args map[string]string) (string, error) {
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 				return name + "-result", nil
 			},
 		}
@@ -441,7 +492,7 @@ func TestAgentHooks_Parallel(t *testing.T) {
 	var started, ended []string
 
 	a.WithHooks(iteragent.AgentHooks{
-		OnToolStart: func(toolName string, args map[string]string) {
+		OnToolStart: func(toolName string, args map[string]interface{}) {
 			mu.Lock()
 			started = append(started, toolName)
 			mu.Unlock()
@@ -507,10 +558,10 @@ func TestPromptMessages_Hooks_BeforeAfterTurn(t *testing.T) {
 // TestPromptMessages_Hooks_OnToolStartEnd verifies OnToolStart and OnToolEnd fire
 // around each tool execution during PromptMessages().
 func TestPromptMessages_Hooks_OnToolStartEnd(t *testing.T) {
-	toolCall := iteragent.ToolCall{Tool: "ping", Args: map[string]string{}}
+	toolCall := iteragent.ToolCall{Tool: "ping", Args: map[string]interface{}{}}
 	pingTool := iteragent.Tool{
 		Name: "ping",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			return "pong", nil
 		},
 	}
@@ -519,7 +570,7 @@ func TestPromptMessages_Hooks_OnToolStartEnd(t *testing.T) {
 
 	var startTools, endTools []string
 	a.WithHooks(iteragent.AgentHooks{
-		OnToolStart: func(toolName string, args map[string]string) {
+		OnToolStart: func(toolName string, args map[string]interface{}) {
 			startTools = append(startTools, toolName)
 		},
 		OnToolEnd: func(toolName string, result string, err error) {
@@ -778,7 +829,7 @@ func TestAgentWithMcpServerHttp_ToolCallable(t *testing.T) {
 	ctx := context.Background()
 	// Agent will call mcp_echo on turn 1, then return "done" on turn 2.
 	p := iteragent.NewMockWithTools("done", []iteragent.ToolCall{
-		{Tool: "mcp_echo", Args: map[string]string{}},
+		{Tool: "mcp_echo", Args: map[string]interface{}{}},
 	})
 	a, err := iteragent.New(p, nil, testLogger()).
 		WithMcpServerHttp(ctx, srv.URL)

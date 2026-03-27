@@ -522,7 +522,7 @@ func TestCallOperation_QueryParams(t *testing.T) {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
 
-	result, err := tools[0].Execute(context.Background(), map[string]string{"limit": "10"})
+	result, err := tools[0].Execute(context.Background(), map[string]interface{}{"limit": "10"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -558,7 +558,7 @@ func TestCallOperation_PathParams(t *testing.T) {
 	a := NewAdapter(spec, Config{BaseURL: srv.URL, Filter: AllOperations()})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{"id": "42"})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{"id": "42"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestCallOperation_RequestBody(t *testing.T) {
 	a := NewAdapter(spec, Config{BaseURL: srv.URL, Filter: AllOperations()})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{"name": "Fluffy"})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{"name": "Fluffy"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -633,7 +633,7 @@ func TestCallOperation_AuthHeader(t *testing.T) {
 	a := NewAdapter(spec, Config{BaseURL: srv.URL, APIKey: "my-secret-key", Filter: AllOperations()})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestCallOperation_CustomHeaders(t *testing.T) {
 	})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -691,7 +691,7 @@ func TestCallOperation_4xxError(t *testing.T) {
 	a := NewAdapter(spec, Config{BaseURL: srv.URL, Filter: AllOperations()})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{})
 	if err == nil {
 		t.Fatal("expected error for 4xx response")
 	}
@@ -717,7 +717,7 @@ func TestCallOperation_5xxError(t *testing.T) {
 	a := NewAdapter(spec, Config{BaseURL: srv.URL, Filter: AllOperations()})
 	tools, _ := a.GetTools()
 
-	_, err := tools[0].Execute(context.Background(), map[string]string{})
+	_, err := tools[0].Execute(context.Background(), map[string]interface{}{})
 	if err == nil {
 		t.Fatal("expected error for 5xx response")
 	}

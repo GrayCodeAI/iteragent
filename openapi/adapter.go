@@ -210,7 +210,7 @@ type Tool struct {
 	Name        string
 	Description string
 	Schema      json.RawMessage
-	Execute     func(ctx context.Context, args map[string]string) (string, error)
+	Execute     func(ctx context.Context, args map[string]interface{}) (string, error)
 }
 
 // GetTools returns all operations that pass the filter as callable Tools.
@@ -261,7 +261,7 @@ func (a *Adapter) GetTools() ([]Tool, error) {
 				Name:        toolName,
 				Description: desc,
 				Schema:      schema,
-				Execute: func(ctx context.Context, args map[string]string) (string, error) {
+				Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 					return a.callOperation(ctx, pathStr, methodStr, operation, args)
 				},
 			}
@@ -357,15 +357,21 @@ func cleanPath(path string) string {
 	return path
 }
 
-func (a *Adapter) callOperation(ctx context.Context, path, method string, op *Operation, args map[string]string) (string, error) {
+func (a *Adapter) callOperation(ctx context.Context, path, method string, op *Operation, args map[string]interface{}) (string, error) {
 	u := a.config.BaseURL + path
 
 	var queryParams []string
 
 	for _, param := range op.Parameters {
-		val, ok := args[param.Name]
+		v, ok := args[param.Name]
 		if !ok {
 			continue
+		}
+		var val string
+		if s, ok := v.(string); ok {
+			val = s
+		} else {
+			val = fmt.Sprint(v)
 		}
 		switch param.In {
 		case "query":

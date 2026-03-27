@@ -11,7 +11,7 @@ type ExecutableTool struct {
 	Name        string
 	Description string
 	InputSchema json.RawMessage
-	Execute     func(ctx context.Context, args map[string]string) (string, error)
+	Execute     func(ctx context.Context, args map[string]interface{}) (string, error)
 }
 
 // toolCaller is satisfied by both *Client and *McpClient.
@@ -57,19 +57,8 @@ func (a *ToolAdapter) GetTools(ctx context.Context) ([]ExecutableTool, error) {
 			Name:        mt.Name,
 			Description: mt.Description,
 			InputSchema: mt.InputSchema,
-			Execute: func(ctx context.Context, args map[string]string) (string, error) {
-				// Convert string args to interface{} with JSON-aware typing.
-				mapArgs := make(map[string]interface{}, len(args))
-				for k, v := range args {
-					var val interface{}
-					if err := json.Unmarshal([]byte(v), &val); err == nil {
-						mapArgs[k] = val
-					} else {
-						mapArgs[k] = v
-					}
-				}
-
-				result, err := a.client.CallTool(ctx, mt.Name, mapArgs)
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				result, err := a.client.CallTool(ctx, mt.Name, args)
 				if err != nil {
 					return "", err
 				}

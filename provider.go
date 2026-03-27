@@ -12,6 +12,9 @@ type CompletionOptions struct {
 	ThinkingLevel ThinkingLevel
 	MaxTokens     int
 	Temperature   float32
+	// Model overrides the provider's configured model for this call.
+	// When empty, the provider uses its default configured model.
+	Model string
 	// CacheConfig enables prompt caching for providers that support it (e.g. Anthropic).
 	// If nil, caching is disabled.
 	CacheConfig *CacheConfig
@@ -21,6 +24,43 @@ type CompletionOptions struct {
 type Provider interface {
 	Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error)
 	Name() string
+}
+
+// NativeToolCaller is an optional interface providers can implement to signal
+// that they support native function/tool-calling APIs (e.g. Anthropic tool_use,
+// OpenAI function_calling, Gemini function declarations).
+//
+// When a provider implements NativeToolCaller the agent framework prefers
+// the native tool loop over the text-based ```tool JSON block protocol.
+type NativeToolCaller interface {
+	// SupportsNativeTools returns true if the provider can accept structured
+	// tool definitions and return structured tool_use / function_call responses.
+	SupportsNativeTools() bool
+}
+
+// ProviderSupportsNativeTools is a convenience helper that returns true when
+// the provider implements NativeToolCaller and reports support.
+func ProviderSupportsNativeTools(p Provider) bool {
+	if ntc, ok := p.(NativeToolCaller); ok {
+		return ntc.SupportsNativeTools()
+	}
+	return false
+}
+
+// ContextWindower is an optional interface providers can implement to report
+// their effective context window in tokens. When not implemented, callers
+// should fall back to a reasonable default (e.g. 128_000).
+type ContextWindower interface {
+	ContextWindow() int
+}
+
+// ProviderContextWindow returns the provider's context window in tokens.
+// Falls back to 128_000 if the provider does not implement ContextWindower.
+func ProviderContextWindow(p Provider) int {
+	if cw, ok := p.(ContextWindower); ok {
+		return cw.ContextWindow()
+	}
+	return 128_000
 }
 
 // TokenStreamer is an optional interface providers can implement to deliver
@@ -33,10 +73,21 @@ type TokenStreamer interface {
 	CompleteStream(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(token string)) (string, error)
 }
 
+// ThinkingStreamer is an optional interface providers can implement to deliver
+// extended thinking tokens separately from text tokens. When a provider
+// implements this interface the agent will call CompleteStreamWithThinking,
+// which emits both text tokens and thinking tokens as they arrive.
+type ThinkingStreamer interface {
+	// CompleteStreamWithThinking performs a completion and calls onToken for
+	// each text token and onThinking for each thinking token. Returns the
+	// full concatenated text response (thinking is not included).
+	CompleteStreamWithThinking(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(string), onThinking func(string)) (string, error)
+}
+
 // NewProvider returns the provider selected by ITERATE_PROVIDER.
-// Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode, opencode-cli (default: gemini)
+// Supported values: ollama, openai, anthropic, groq, gemini, nvidia, opencode, opencode-cli, azure (default: gemini)
 // If apiKey is provided, it takes priority over environment variables.
-// 
+//
 // opencode-cli uses the OpenCode CLI internally, enabling access to free models
 // like mimo-v2-pro-free without requiring a public REST API.
 func NewProvider(providerName string, apiKey ...string) (Provider, error) {
@@ -146,6 +197,27 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 			BaseURL: getEnvOr("OPENCODE_BASE_URL", "https://api.opencode.ai/v1"),
 			Model:   model,
 			APIKey:  key,
+		}), nil
+
+	case "azure", "azure-openai":
+		key := providedKey
+		if key == "" {
+			key = os.Getenv("AZURE_OPENAI_API_KEY")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("AZURE_OPENAI_API_KEY is required for azure provider (or use --api-key)")
+		}
+		endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
+		if endpoint == "" {
+			return nil, fmt.Errorf("AZURE_OPENAI_ENDPOINT is required for azure provider (e.g. https://my-resource.openai.azure.com)")
+		}
+		deployment := getEnvOr("AZURE_OPENAI_DEPLOYMENT", getEnvOr("ITERATE_MODEL", "gpt-4o"))
+		apiVersion := getEnvOr("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+		return NewAzureOpenAI(AzureOpenAIConfig{
+			APIKey:     key,
+			Endpoint:   strings.TrimRight(endpoint, "/"),
+			Deployment: deployment,
+			APIVersion: apiVersion,
 		}), nil
 
 	case "opencode-cli":

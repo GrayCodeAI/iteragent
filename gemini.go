@@ -35,6 +35,24 @@ func (p *geminiProvider) Name() string {
 	return fmt.Sprintf("gemini(%s)", p.cfg.Model)
 }
 
+// ContextWindow returns the context window for the configured Gemini model.
+func (p *geminiProvider) ContextWindow() int {
+	return geminiContextWindow(p.cfg.Model)
+}
+
+func geminiContextWindow(model string) int {
+	switch {
+	case strings.HasPrefix(model, "gemini-2.5"):
+		return 1_048_576
+	case strings.HasPrefix(model, "gemini-2.0"), strings.HasPrefix(model, "gemini-1.5"):
+		return 1_000_000
+	case strings.HasPrefix(model, "gemini-1.0"), model == "gemini-pro":
+		return 32_760
+	default:
+		return 1_000_000
+	}
+}
+
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
@@ -116,9 +134,13 @@ func (p *geminiProvider) CompleteStream(ctx context.Context, messages []Message,
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
+	model := p.cfg.Model
+	if opt.Model != "" {
+		model = opt.Model
+	}
 	streamURL := fmt.Sprintf(
 		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?key=%s&alt=sse",
-		p.cfg.Model, p.cfg.APIKey)
+		model, p.cfg.APIKey)
 
 	var full strings.Builder
 	sseClient := NewSSEClient()
@@ -151,7 +173,11 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts 
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.cfg.Model, p.cfg.APIKey)
+	geminiModel := p.cfg.Model
+	if opt.Model != "" {
+		geminiModel = opt.Model
+	}
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", geminiModel, p.cfg.APIKey)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)

@@ -28,7 +28,7 @@ func TestEstimateTokens(t *testing.T) {
 
 func TestEstimateTotalTokens(t *testing.T) {
 	msgs := []iteragent.Message{
-		{Role: "user", Content: "abcd"},     // 1 token + 4 overhead = 5
+		{Role: "user", Content: "abcd"},      // 1 token + 4 overhead = 5
 		{Role: "assistant", Content: "abcd"}, // 1 token + 4 overhead = 5
 	}
 	got := iteragent.EstimateTotalTokens(msgs)
@@ -130,7 +130,7 @@ func TestCompactMessagesTiered_Level3_KeepsFirstAndLast(t *testing.T) {
 	}
 
 	cfg := iteragent.ContextConfig{
-		MaxTokens:          10,  // extremely low → all levels triggered
+		MaxTokens:          10, // extremely low → all levels triggered
 		KeepRecent:         3,
 		KeepFirst:          2,
 		ToolOutputMaxLines: 5,
@@ -369,7 +369,7 @@ func TestCompactMessagesTiered_AssistantSummary(t *testing.T) {
 	}
 
 	cfg := iteragent.ContextConfig{
-		MaxTokens:          80,  // enough to trigger level 2 but not drop everything
+		MaxTokens:          80, // enough to trigger level 2 but not drop everything
 		KeepRecent:         2,
 		KeepFirst:          1,
 		ToolOutputMaxLines: 50,

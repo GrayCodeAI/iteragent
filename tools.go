@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+// ArgStr safely extracts a string value from a map[string]interface{} args map.
+// If the key is missing or the value is nil, it returns "".
+// Non-string values are coerced to a string via fmt.Sprint.
+func ArgStr(args map[string]interface{}, key string) string {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
 var protectedPaths []string
 
 var dangerousPatterns = []string{
@@ -88,8 +102,8 @@ func BashTool(repoPath string) Tool {
 	return Tool{
 		Name:        "bash",
 		Description: "Run a shell command in the repo directory.\nArgs: {\"cmd\": \"go build ./...\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			cmd := args["cmd"]
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			cmd := ArgStr(args, "cmd")
 			if cmd == "" {
 				return "", fmt.Errorf("cmd is required")
 			}
@@ -114,14 +128,15 @@ func ReadFileTool(repoPath string) Tool {
 	return Tool{
 		Name:        "read_file",
 		Description: "Read a file from the repo.\nArgs: {\"path\": \"internal/agent/agent.go\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path, err := safeJoin(repoPath, args["path"])
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			p := ArgStr(args, "path")
+			path, err := safeJoin(repoPath, p)
 			if err != nil {
 				return "", err
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return "", fmt.Errorf("read %s: %w", args["path"], err)
+				return "", fmt.Errorf("read %s: %w", p, err)
 			}
 			return string(data), nil
 		},
@@ -132,21 +147,23 @@ func WriteFileTool(repoPath string) Tool {
 	return Tool{
 		Name:        "write_file",
 		Description: "Write or overwrite a file in the repo.\nArgs: {\"path\": \"internal/agent/agent.go\", \"content\": \"...\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path, err := safeJoin(repoPath, args["path"])
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			p := ArgStr(args, "path")
+			content := ArgStr(args, "content")
+			path, err := safeJoin(repoPath, p)
 			if err != nil {
 				return "", err
 			}
 			if isPathProtected(path) {
-				return "", fmt.Errorf("write to %s is protected", args["path"])
+				return "", fmt.Errorf("write to %s is protected", p)
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return "", err
 			}
-			if err := os.WriteFile(path, []byte(args["content"]), 0o644); err != nil {
-				return "", fmt.Errorf("write %s: %w", args["path"], err)
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				return "", fmt.Errorf("write %s: %w", p, err)
 			}
-			return fmt.Sprintf("wrote %s (%d bytes)", args["path"], len(args["content"])), nil
+			return fmt.Sprintf("wrote %s (%d bytes)", p, len(content)), nil
 		},
 	}
 }
@@ -155,23 +172,24 @@ func EditFileTool(repoPath string) Tool {
 	return Tool{
 		Name:        "edit_file",
 		Description: "Edit a file by replacing oldString with newString.\nArgs: {\"path\": \"file.go\", \"oldString\": \"old\", \"newString\": \"new\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			path, err := safeJoin(repoPath, args["path"])
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			p := ArgStr(args, "path")
+			path, err := safeJoin(repoPath, p)
 			if err != nil {
 				return "", err
 			}
 			if isPathProtected(path) {
-				return "", fmt.Errorf("edit %s is protected", args["path"])
+				return "", fmt.Errorf("edit %s is protected", p)
 			}
-			oldStr := args["oldString"]
-			newStr := args["newString"]
+			oldStr := ArgStr(args, "oldString")
+			newStr := ArgStr(args, "newString")
 			if oldStr == "" {
 				return "", fmt.Errorf("oldString is required")
 			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return "", fmt.Errorf("read %s: %w", args["path"], err)
+				return "", fmt.Errorf("read %s: %w", p, err)
 			}
 
 			content := string(data)
@@ -181,9 +199,9 @@ func EditFileTool(repoPath string) Tool {
 
 			newContent := strings.Replace(content, oldStr, newStr, 1)
 			if err := os.WriteFile(path, []byte(newContent), 0o644); err != nil {
-				return "", fmt.Errorf("write %s: %w", args["path"], err)
+				return "", fmt.Errorf("write %s: %w", p, err)
 			}
-			return fmt.Sprintf("edited %s", args["path"]), nil
+			return fmt.Sprintf("edited %s", p), nil
 		},
 	}
 }
@@ -192,7 +210,7 @@ func ListFilesTool(repoPath string) Tool {
 	return Tool{
 		Name:        "list_files",
 		Description: "List all files in the repo.\nArgs: {}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			var files []string
 			err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
@@ -214,15 +232,15 @@ func SearchTool(repoPath string) Tool {
 	return Tool{
 		Name:        "search",
 		Description: "Search for text in files.\nArgs: {\"pattern\": \"TODO\", \"path\": \".\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			pattern := args["pattern"]
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			pattern := ArgStr(args, "pattern")
 			if pattern == "" {
 				return "", fmt.Errorf("pattern is required")
 			}
 			path := repoPath
-			if args["path"] != "" {
+			if ap := ArgStr(args, "path"); ap != "" {
 				var err error
-				path, err = safeJoin(repoPath, args["path"])
+				path, err = safeJoin(repoPath, ap)
 				if err != nil {
 					return "", err
 				}
@@ -240,7 +258,7 @@ func GitDiffTool(repoPath string) Tool {
 	return Tool{
 		Name:        "git_diff",
 		Description: "Show current unstaged changes.\nArgs: {}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			c := exec.CommandContext(ctx, "git", "diff")
 			c.Dir = repoPath
 			out, err := c.Output()
@@ -253,8 +271,8 @@ func GitCommitTool(repoPath string) Tool {
 	return Tool{
 		Name:        "git_commit",
 		Description: "Stage all changes and commit.\nArgs: {\"message\": \"feat: improve error handling\"}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
-			msg := args["message"]
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			msg := ArgStr(args, "message")
 			if msg == "" {
 				msg = fmt.Sprintf("iterate: auto-improvement session %s", time.Now().Format("2006-01-02"))
 			}
@@ -283,7 +301,7 @@ func GitRevertTool(repoPath string) Tool {
 	return Tool{
 		Name:        "git_revert",
 		Description: "Discard all unstaged changes.\nArgs: {}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			c := exec.CommandContext(ctx, "git", "checkout", "--", ".")
 			c.Dir = repoPath
 			out, err := c.CombinedOutput()
@@ -296,7 +314,7 @@ func RunTestsTool(repoPath string) Tool {
 	return Tool{
 		Name:        "run_tests",
 		Description: "Run go build and go test.\nArgs: {}",
-		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+		Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
 			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
 

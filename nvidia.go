@@ -35,8 +35,16 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts 
 		url = url + "/chat/completions"
 	}
 
+	var nvidiaOpt CompletionOptions
+	if len(opts) > 0 {
+		nvidiaOpt = opts[0]
+	}
+	nvidiaModel := p.cfg.Model
+	if nvidiaOpt.Model != "" {
+		nvidiaModel = nvidiaOpt.Model
+	}
 	reqBody := map[string]interface{}{
-		"model":    p.cfg.Model,
+		"model":    nvidiaModel,
 		"messages": messages,
 		"stream":   false,
 	}
@@ -90,8 +98,12 @@ func (p *nvidiaProvider) CompleteStream(ctx context.Context, messages []Message,
 		url = url + "/chat/completions"
 	}
 
+	nvidiaStreamModel := p.cfg.Model
+	if opt.Model != "" {
+		nvidiaStreamModel = opt.Model
+	}
 	reqBody := map[string]interface{}{
-		"model":    p.cfg.Model,
+		"model":    nvidiaStreamModel,
 		"messages": messages,
 		"stream":   true,
 	}

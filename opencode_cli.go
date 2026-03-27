@@ -3,12 +3,16 @@ package iteragent
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // OpenCodeCLIConfig configures the OpenCode CLI provider.
@@ -16,19 +20,39 @@ type OpenCodeCLIConfig struct {
 	Model string // e.g., "mimo-v2-pro-free"
 }
 
+// opencodeCLIProvider runs a persistent `opencode serve` process and sends
+// each message via `opencode run --attach <url> --continue`, avoiding the
+// cold-start overhead of spawning a new process per message.
 type opencodeCLIProvider struct {
-	cfg OpenCodeCLIConfig
+	cfg       OpenCodeCLIConfig
+	mu        sync.Mutex
+	serverURL string
+	serverCmd *exec.Cmd
+	isFirst   bool // true until the first message is sent (no session to continue yet)
 }
 
 // NewOpenCodeCLI returns a provider that uses the OpenCode CLI internally.
 // This enables access to OpenCode's free models without a public REST API.
 func NewOpenCodeCLI(cfg OpenCodeCLIConfig) Provider {
-	return &opencodeCLIProvider{cfg: cfg}
+	return &opencodeCLIProvider{cfg: cfg, isFirst: true}
 }
 
 func (p *opencodeCLIProvider) Name() string {
 	model := strings.TrimPrefix(p.cfg.Model, "opencode/")
 	return fmt.Sprintf("opencode-cli(%s)", model)
+}
+
+// Close shuts down the background opencode server process.
+func (p *opencodeCLIProvider) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.serverCmd != nil && p.serverCmd.Process != nil {
+		_ = p.serverCmd.Process.Kill()
+		p.serverCmd = nil
+		p.serverURL = ""
+		p.isFirst = true
+	}
+	return nil
 }
 
 // opencodeEvent represents a single event from OpenCode's JSON output.
@@ -43,27 +67,20 @@ type opencodeEvent struct {
 	} `json:"part"`
 }
 
-// CompleteStream implements TokenStreamer by spawning OpenCode CLI and parsing JSON output.
+// CompleteStream implements TokenStreamer by routing through the persistent server.
 func (p *opencodeCLIProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
-	// Build the prompt from messages
-	var prompt strings.Builder
-	for _, msg := range messages {
-		switch msg.Role {
-		case "system":
-			prompt.WriteString("System: ")
-			prompt.WriteString(msg.Content)
-			prompt.WriteString("\n\n")
-		case "user":
-			prompt.WriteString(msg.Content)
-		case "assistant":
-			// Include assistant messages for context
-			prompt.WriteString("\n\nPrevious response: ")
-			prompt.WriteString(msg.Content)
-			prompt.WriteString("\n\nContinue: ")
-		}
+	// Only send the last user message — the server holds the full session history.
+	prompt := lastUserMessage(messages)
+	if prompt == "" {
+		return "", fmt.Errorf("no user message to send")
 	}
 
-	return p.runOpenCode(ctx, prompt.String(), onToken)
+	if err := p.ensureServer(ctx); err != nil {
+		// Fall back to direct (per-call) mode if the server can't start.
+		return p.runDirect(ctx, messages, onToken)
+	}
+
+	return p.runViaServer(ctx, prompt, onToken)
 }
 
 func (p *opencodeCLIProvider) Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error) {
@@ -74,15 +91,63 @@ func (p *opencodeCLIProvider) Complete(ctx context.Context, messages []Message, 
 	return p.CompleteStream(ctx, messages, opt, nil)
 }
 
-// runOpenCode spawns the OpenCode CLI and streams its output.
-func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, onToken func(string)) (string, error) {
-	// Find opencode binary
-	opencodePath, err := exec.LookPath("opencode")
-	if err != nil {
-		return "", fmt.Errorf("opencode CLI not found in PATH: %w", err)
+// ensureServer starts `opencode serve` on a free port if not already running.
+func (p *opencodeCLIProvider) ensureServer(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.serverURL != "" {
+		return nil
 	}
 
-	// Build command arguments
+	opencodePath, err := exec.LookPath("opencode")
+	if err != nil {
+		return fmt.Errorf("opencode CLI not found in PATH: %w", err)
+	}
+
+	port, err := findFreePort()
+	if err != nil {
+		return fmt.Errorf("find free port: %w", err)
+	}
+
+	cmd := exec.Command(opencodePath, "serve", "--port", strconv.Itoa(port))
+	cmd.Env = os.Environ()
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start opencode server: %w", err)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	// Poll until the server is accepting connections (up to 15 s).
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			p.serverURL = url
+			p.serverCmd = cmd
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+
+	_ = cmd.Process.Kill()
+	return fmt.Errorf("opencode server did not become ready within 15s")
+}
+
+// runViaServer sends a message to the running server and streams the response.
+func (p *opencodeCLIProvider) runViaServer(ctx context.Context, prompt string, onToken func(string)) (string, error) {
+	opencodePath, _ := exec.LookPath("opencode")
+
 	modelArg := p.cfg.Model
 	if !strings.HasPrefix(modelArg, "opencode/") {
 		modelArg = "opencode/" + modelArg
@@ -90,47 +155,87 @@ func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, on
 
 	args := []string{
 		"run",
+		"--attach", p.serverURL,
 		"--model", modelArg,
 		"--format", "json",
-		prompt,
 	}
 
-	cmd := exec.CommandContext(ctx, opencodePath, args...)
-	cmd.Env = os.Environ() // Pass through environment variables
+	p.mu.Lock()
+	if !p.isFirst {
+		args = append(args, "--continue")
+	}
+	p.isFirst = false
+	p.mu.Unlock()
 
-	// Get stdout pipe for streaming
+	args = append(args, prompt)
+	return p.execAndStream(ctx, opencodePath, args, onToken)
+}
+
+// runDirect spawns a one-shot `opencode run` without a server (fallback).
+func (p *opencodeCLIProvider) runDirect(ctx context.Context, messages []Message, onToken func(string)) (string, error) {
+	opencodePath, err := exec.LookPath("opencode")
+	if err != nil {
+		return "", fmt.Errorf("opencode CLI not found in PATH: %w", err)
+	}
+
+	modelArg := p.cfg.Model
+	if !strings.HasPrefix(modelArg, "opencode/") {
+		modelArg = "opencode/" + modelArg
+	}
+
+	// Flatten messages into a single prompt for direct mode.
+	var buf strings.Builder
+	for _, msg := range messages {
+		switch msg.Role {
+		case "system":
+			buf.WriteString(msg.Content)
+			buf.WriteString("\n\n")
+		case "user":
+			buf.WriteString(msg.Content)
+		case "assistant":
+			buf.WriteString(msg.Content)
+			buf.WriteString("\n\n")
+		}
+	}
+
+	args := []string{"run", "--model", modelArg, "--format", "json", buf.String()}
+	return p.execAndStream(ctx, opencodePath, args, onToken)
+}
+
+// execAndStream runs an opencode command and streams JSON events to onToken.
+func (p *opencodeCLIProvider) execAndStream(ctx context.Context, bin string, args []string, onToken func(string)) (string, error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = os.Environ()
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("create stdout pipe: %w", err)
 	}
-
-	// Capture stderr for debugging
 	var stderrBuf strings.Builder
 	cmd.Stderr = &stderrBuf
 
-	// Start the command
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start opencode: %w", err)
 	}
 
-	// Read plain text output from opencode run
 	var fullResponse strings.Builder
-	var lastErr error
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	skipHeader := true
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Skip "> build · model" header line
-		if skipHeader && (len(line) == 0 || (len(line) > 0 && line[0] == '>')) {
+		if skipHeader && (len(line) == 0 || line[0] == '>') {
 			continue
 		}
 		skipHeader = false
-		fullResponse.WriteString(line)
-		fullResponse.WriteString("\n")
-		if onToken != nil {
-			onToken(line + "\n")
+
+		var event opencodeEvent
+		if err := json.Unmarshal([]byte(line), &event); err == nil && event.Part.Text != "" {
+			fullResponse.WriteString(event.Part.Text)
+			if onToken != nil {
+				onToken(event.Part.Text)
+			}
 		}
 	}
 
@@ -138,60 +243,36 @@ func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, on
 		return "", fmt.Errorf("read opencode output: %w", scanErr)
 	}
 
-	// Wait for command to complete
 	if err := cmd.Wait(); err != nil {
-		stderr := stderrBuf.String()
-		if stderr != "" {
-			return "", fmt.Errorf("opencode exited with error: %w, stderr: %s", err, stderr)
+		if stderr := stderrBuf.String(); stderr != "" {
+			return "", fmt.Errorf("opencode error: %w — %s", err, stderr)
 		}
-		return "", fmt.Errorf("opencode exited with error: %w", err)
-	}
-
-	if lastErr != nil {
-		return "", lastErr
+		return "", fmt.Errorf("opencode error: %w", err)
 	}
 
 	result := fullResponse.String()
 	if result == "" {
 		return "", fmt.Errorf("empty response from opencode-cli")
 	}
-
 	return result, nil
 }
 
-// OpenCodeCLIServer wraps the OpenCode CLI in a long-running server mode
-// for better performance (avoids CLI startup overhead on each call).
-type OpenCodeCLIServer struct {
-	model   string
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  *bufio.Scanner
-	mu      sync.Mutex
-	running bool
+// lastUserMessage returns the content of the last user message in the slice.
+func lastUserMessage(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
-// NewOpenCodeCLIServer creates a persistent OpenCode server process.
-// This is more efficient for multiple calls.
-func NewOpenCodeCLIServer(model string) (*OpenCodeCLIServer, error) {
-	_, err := exec.LookPath("opencode")
+// findFreePort returns a free TCP port on localhost.
+func findFreePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("opencode CLI not found: %w", err)
+		return 0, err
 	}
-
-	// Use opencode serve mode if available, otherwise fall back to per-call
-	return &OpenCodeCLIServer{
-		model: model,
-	}, nil
-}
-
-// Close stops the server process.
-func (s *OpenCodeCLIServer) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
-	if s.cmd != nil && s.running {
-		s.running = false
-		return s.cmd.Process.Kill()
-	}
-	return nil
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }

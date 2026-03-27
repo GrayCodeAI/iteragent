@@ -37,7 +37,7 @@ func TestReadFileTool(t *testing.T) {
 	}
 
 	// Path is relative to repoPath (dir).
-	out, err := tool.Execute(context.Background(), map[string]string{"path": "test.txt"})
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"path": "test.txt"})
 	if err != nil {
 		t.Fatalf("read_file error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestWriteFileTool(t *testing.T) {
 	}
 
 	// Path is relative to repoPath (dir).
-	_, err := tool.Execute(context.Background(), map[string]string{
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
 		"path":    "out.txt",
 		"content": "written by test",
 	})
@@ -86,7 +86,7 @@ func TestListFilesTool(t *testing.T) {
 		t.Fatal("list_files tool not found")
 	}
 
-	out, err := tool.Execute(context.Background(), map[string]string{"path": dir})
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"path": dir})
 	if err != nil {
 		t.Fatalf("list_files error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBashTool(t *testing.T) {
 		t.Fatal("bash tool not found")
 	}
 
-	out, err := tool.Execute(context.Background(), map[string]string{"cmd": "echo hello_bash"})
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"cmd": "echo hello_bash"})
 	if err != nil {
 		t.Fatalf("bash error: %v", err)
 	}

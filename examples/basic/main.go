@@ -45,7 +45,7 @@ func main() {
 		AfterTurn: func(turn int, response string) {
 			fmt.Printf("[hook] turn %d done in %s\n", turn, time.Since(turnStart).Round(time.Millisecond))
 		},
-		OnToolStart: func(toolName string, args map[string]string) {
+		OnToolStart: func(toolName string, args map[string]interface{}) {
 			fmt.Printf("[hook] → tool %s\n", toolName)
 		},
 		OnToolEnd: func(toolName string, result string, err error) {

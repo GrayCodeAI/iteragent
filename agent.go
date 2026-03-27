@@ -14,15 +14,15 @@ import (
 
 // ToolCall represents a tool invocation.
 type ToolCall struct {
-	Tool string            `json:"tool"`
-	Args map[string]string `json:"args"`
+	Tool string                 `json:"tool"`
+	Args map[string]interface{} `json:"args"`
 }
 
 // Tool represents a capability the agent can invoke.
 type Tool struct {
 	Name        string
 	Description string
-	Execute     func(ctx context.Context, args map[string]string) (string, error)
+	Execute     func(ctx context.Context, args map[string]interface{}) (string, error)
 }
 
 // Event represents a step in the agent's reasoning.
@@ -45,7 +45,7 @@ type AgentHooks struct {
 	// AfterTurn is called after each provider completion turn with the response.
 	AfterTurn func(turn int, response string)
 	// OnToolStart is called before each tool execution.
-	OnToolStart func(toolName string, args map[string]string)
+	OnToolStart func(toolName string, args map[string]interface{})
 	// OnToolEnd is called after each tool execution with the result and any error.
 	OnToolEnd func(toolName string, result string, err error)
 }
@@ -90,9 +90,16 @@ type Agent struct {
 	// cacheConfig controls prompt caching behaviour.
 	cacheConfig CacheConfig
 
+	// pinnedMessages are always kept in context even after compaction.
+	// They are inserted right after the system message every turn.
+	pinnedMessages []Message
+
 	// mcpClients holds MCP server connections owned by this agent.
 	// They are shut down when Close() is called.
 	mcpClients []*mcp.McpClient
+
+	// fallbackModel is used when the primary model fails with a model-specific error.
+	fallbackModel string
 }
 
 // New creates a new Agent.
@@ -126,8 +133,46 @@ func (a *Agent) completionOpts() CompletionOptions {
 		ThinkingLevel: a.ThinkingLevel,
 		MaxTokens:     a.MaxTokens,
 		Temperature:   a.Temperature,
+		Model:         a.Model,
 		CacheConfig:   cache,
 	}
+}
+
+// SetPinnedMessages sets messages that are always kept in context after the
+// system message and are protected from compaction.
+func (a *Agent) SetPinnedMessages(msgs []Message) {
+	a.mu.Lock()
+	a.pinnedMessages = append([]Message{}, msgs...)
+	a.mu.Unlock()
+}
+
+// injectPinned inserts pinned messages right after the system message (index 0)
+// if they are not already present there.
+func (a *Agent) injectPinned(messages []Message) []Message {
+	a.mu.Lock()
+	pinned := append([]Message{}, a.pinnedMessages...)
+	a.mu.Unlock()
+	if len(pinned) == 0 || len(messages) == 0 {
+		return messages
+	}
+	rest := messages[1:]
+	if len(rest) >= len(pinned) {
+		alreadyPresent := true
+		for i, p := range pinned {
+			if rest[i].Role != p.Role || rest[i].Content != p.Content {
+				alreadyPresent = false
+				break
+			}
+		}
+		if alreadyPresent {
+			return messages
+		}
+	}
+	result := make([]Message, 0, len(messages)+len(pinned))
+	result = append(result, messages[0])
+	result = append(result, pinned...)
+	result = append(result, rest...)
+	return result
 }
 
 // maybeCompact checks if messages exceed the warning threshold and compacts them.
@@ -142,7 +187,19 @@ func (a *Agent) maybeCompact(messages []Message, emitFn func(Event)) []Message {
 	if current < warningTokens {
 		return messages
 	}
-	compacted := CompactMessagesTiered(messages, cfg)
+	// Bump KeepFirst to protect pinned messages from being dropped.
+	a.mu.Lock()
+	nPinned := len(a.pinnedMessages)
+	a.mu.Unlock()
+	cfg.KeepFirst += nPinned
+	var compacted []Message
+	if cfg.Strategy != nil {
+		compacted = cfg.Strategy.Compact(messages, cfg.MaxTokens)
+	} else {
+		compacted = CompactMessagesTiered(messages, cfg)
+	}
+	// Re-inject pinned messages in case compaction still removed them.
+	compacted = a.injectPinned(compacted)
 	emitFn(Event{Type: string(EventContextCompacted), Content: "context compacted"})
 	return compacted
 }
@@ -179,9 +236,14 @@ func (a *Agent) executeTools(ctx context.Context, calls []ToolCall, iteration in
 }
 
 func (a *Agent) executeToolsSequential(ctx context.Context, calls []ToolCall, iteration int, emitFn func(Event)) string {
+	maxLines := a.toolExecConfig.MaxOutputLines
+	if maxLines <= 0 {
+		maxLines = 200
+	}
 	var toolResults strings.Builder
 	for _, call := range calls {
 		result, isError := a.executeSingleTool(ctx, call, iteration, emitFn)
+		result = capToolOutput(result, maxLines)
 		if isError && result == fmt.Sprintf("unknown tool: %s", call.Tool) {
 			toolResults.WriteString(fmt.Sprintf("Tool %s: %s\n", call.Tool, result))
 		} else {
@@ -238,15 +300,37 @@ func (a *Agent) executeToolsParallel(ctx context.Context, calls []ToolCall, iter
 	}
 	wg.Wait()
 
+	maxLines := a.toolExecConfig.MaxOutputLines
+	if maxLines <= 0 {
+		maxLines = 200
+	}
+
 	var sb strings.Builder
 	for _, r := range results {
+		result := capToolOutput(r.result, maxLines)
 		if r.unknown {
-			sb.WriteString(fmt.Sprintf("Tool %s: %s\n", r.call.Tool, r.result))
+			sb.WriteString(fmt.Sprintf("Tool %s: %s\n", r.call.Tool, result))
 		} else {
-			sb.WriteString(fmt.Sprintf("Tool %s result:\n%s\n\n", r.call.Tool, r.result))
+			sb.WriteString(fmt.Sprintf("Tool %s result:\n%s\n\n", r.call.Tool, result))
 		}
 	}
 	return sb.String()
+}
+
+// capToolOutput truncates a tool result to at most maxLines lines, keeping the
+// first half and last half (head+tail) to preserve both context and outcome.
+func capToolOutput(result string, maxLines int) string {
+	lines := strings.Split(result, "\n")
+	if len(lines) <= maxLines {
+		return result
+	}
+	half := maxLines / 2
+	head := lines[:half]
+	tail := lines[len(lines)-half:]
+	dropped := len(lines) - maxLines
+	return strings.Join(head, "\n") +
+		fmt.Sprintf("\n\n[... %d lines omitted ...]\n\n", dropped) +
+		strings.Join(tail, "\n")
 }
 
 func (a *Agent) executeToolsBatched(ctx context.Context, calls []ToolCall, iteration int, emitFn func(Event)) string {
@@ -276,15 +360,11 @@ func (a *Agent) executeSingleTool(ctx context.Context, call ToolCall, iteration 
 		return result, true
 	}
 
-	argsMap := make(map[string]interface{})
-	for k, v := range call.Args {
-		argsMap[k] = v
-	}
 	emitFn(Event{
 		Type:       string(EventToolExecutionStart),
 		ToolName:   call.Tool,
 		ToolCallID: fmt.Sprintf("%s-%d", call.Tool, iteration),
-		Args:       argsMap,
+		Args:       call.Args,
 	})
 	a.logger.Info("executing tool", "tool", call.Tool, "args", call.Args)
 
@@ -433,7 +513,13 @@ func ParseToolCalls(output string) []ToolCall {
 		}
 		if inBlock && line == "```" {
 			var call ToolCall
-			if err := json.Unmarshal([]byte(block.String()), &call); err == nil {
+			raw := block.String()
+			if err := json.Unmarshal([]byte(raw), &call); err != nil {
+				if recovered, ok := recoverToolCallJSON(raw); ok {
+					call = recovered
+				}
+			}
+			if call.Tool != "" {
 				calls = append(calls, call)
 			}
 			inBlock = false
@@ -444,6 +530,77 @@ func ParseToolCalls(output string) []ToolCall {
 		}
 	}
 	return calls
+}
+
+// recoverToolCallJSON attempts to repair common JSON malformations in a tool
+// call block (truncation, trailing garbage) and returns a parsed ToolCall.
+func recoverToolCallJSON(raw string) (ToolCall, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ToolCall{}, false
+	}
+
+	// Strip any trailing non-JSON characters after the last closing brace.
+	if idx := strings.LastIndex(s, "}"); idx >= 0 {
+		s = s[:idx+1]
+	}
+
+	// Try as-is first (it may now be valid after trimming).
+	var call ToolCall
+	if err := json.Unmarshal([]byte(s), &call); err == nil && call.Tool != "" {
+		return call, true
+	}
+
+	// Count unmatched braces/brackets and close them.
+	opens := 0
+	openBrackets := 0
+	inStr := false
+	escaped := false
+	for _, ch := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inStr {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		switch ch {
+		case '{':
+			opens++
+		case '}':
+			opens--
+		case '[':
+			openBrackets++
+		case ']':
+			openBrackets--
+		}
+	}
+	// Close any unclosed string.
+	if inStr {
+		s += `"`
+	}
+	// Close unclosed brackets then braces.
+	for openBrackets > 0 {
+		s += "]"
+		openBrackets--
+	}
+	for opens > 0 {
+		s += "}"
+		opens--
+	}
+
+	if err := json.Unmarshal([]byte(s), &call); err == nil && call.Tool != "" {
+		return call, true
+	}
+	return ToolCall{}, false
 }
 
 // ToolMap converts a slice of tools to a name-indexed map.
@@ -570,6 +727,28 @@ func (a *Agent) WithCacheEnabled(enabled bool) *Agent {
 		a.cacheConfig = CacheConfig{}
 	}
 	return a
+}
+
+// WithFallbackModel sets a model to retry with when the primary model fails with
+// a model-specific error (e.g. "model not found", "invalid model").
+func (a *Agent) WithFallbackModel(model string) *Agent {
+	a.fallbackModel = model
+	return a
+}
+
+// isFallbackError reports whether err looks like a model-specific (non-transient) error
+// that warrants retrying with a fallback model.
+func isFallbackError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "model not found") ||
+		strings.Contains(lower, "model_not_found") ||
+		strings.Contains(lower, "does not exist") ||
+		strings.Contains(lower, "invalid model") ||
+		strings.Contains(lower, "no such model") ||
+		strings.Contains(lower, "unknown model")
 }
 
 // WithMcpServerStdio connects to an MCP server via stdio (spawns a child process),
@@ -706,45 +885,12 @@ func (a *Agent) Reset() {
 // to ensure state is fully updated. Calls Finish() first to resolve
 // any previous in-progress operation.
 func (a *Agent) Prompt(ctx context.Context, text string) chan Event {
-	a.Finish()
-
-	loopCtx, cancel := context.WithCancel(ctx)
-	events := make(chan Event, 64)
-
 	a.mu.Lock()
-	a.cancelFn = cancel
-	a.isStreaming = true
-	a.activeEvents = events
+	prior := append([]Message{}, a.Messages...)
 	a.mu.Unlock()
 
-	// emitFn routes events to the per-call channel.
-	emitFn := func(e Event) {
-		select {
-		case events <- e:
-		default:
-		}
-	}
-
-	a.pendingWg.Add(1)
-	go func() {
-		defer func() {
-			a.pendingWg.Done()
-			a.mu.Lock()
-			a.isStreaming = false
-			a.activeEvents = nil
-			a.mu.Unlock()
-			cancel()
-			close(events)
-		}()
-		emitFn(Event{Type: string(EventMessageStart), Content: text})
-		output, err := a.Run(loopCtx, a.SystemPrompt, text, emitFn)
-		if err != nil {
-			emitFn(Event{Type: string(EventError), Content: err.Error(), IsError: true})
-		} else {
-			emitFn(Event{Type: string(EventMessageEnd), Content: output})
-		}
-	}()
-	return events
+	msgs := append(prior, Message{Role: "user", Content: text})
+	return a.PromptMessages(ctx, msgs)
 }
 
 // PromptMessages sends a set of messages and returns an event channel immediately.
@@ -754,7 +900,9 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 	a.Finish()
 
 	loopCtx, cancel := context.WithCancel(ctx)
-	events := make(chan Event, 64)
+	// Buffer sized for worst-case parallel tool burst:
+	// 20 tools × 2 events (start+end) + 200 token events + overhead = 1024.
+	events := make(chan Event, 1024)
 
 	a.mu.Lock()
 	a.cancelFn = cancel
@@ -762,11 +910,12 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 	a.activeEvents = events
 	a.mu.Unlock()
 
-	// emitFn routes events to the per-call channel.
+	// emitFn sends the event or blocks until the consumer reads it (or context
+	// is cancelled). This prevents silent token drops when the buffer fills.
 	emitFn := func(e Event) {
 		select {
 		case events <- e:
-		default:
+		case <-loopCtx.Done():
 		}
 	}
 
@@ -791,6 +940,8 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 
 		fullMessages := []Message{{Role: "system", Content: systemContent}}
 		fullMessages = append(fullMessages, messages...)
+		// Inject pinned messages right after system message.
+		fullMessages = a.injectPinned(fullMessages)
 
 		// Apply input filters to the last user message if present.
 		for i := len(fullMessages) - 1; i >= 0; i-- {
@@ -808,12 +959,15 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 		emitFn(Event{Type: string(EventMessageStart), Content: ""})
 
 		opts := a.completionOpts()
+		lastToolCallKey := ""
+		sameToolCount := 0
 
 		for i := 0; i < 20; i++ {
 			// Check for cancellation before each turn.
 			select {
 			case <-loopCtx.Done():
-				emitFn(Event{Type: string(EventError), Content: loopCtx.Err().Error(), IsError: true})
+				// Send directly — emitFn would also see loopCtx.Done() and silently drop.
+				events <- Event{Type: string(EventError), Content: loopCtx.Err().Error(), IsError: true}
 				return
 			default:
 			}
@@ -831,7 +985,18 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 				response string
 				turnErr  error
 			)
-			if ts, ok := a.provider.(TokenStreamer); ok {
+			if tts, ok := a.provider.(ThinkingStreamer); ok && opts.ThinkingLevel != ThinkingLevelOff && opts.ThinkingLevel != "" {
+				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+					return tts.CompleteStreamWithThinking(loopCtx, fullMessages, opts,
+						func(token string) {
+							emitFn(Event{Type: string(EventTokenUpdate), Content: token})
+						},
+						func(thinking string) {
+							emitFn(Event{Type: string(EventThinkingUpdate), Content: thinking})
+						},
+					)
+				})
+			} else if ts, ok := a.provider.(TokenStreamer); ok {
 				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
 					return ts.CompleteStream(loopCtx, fullMessages, opts, func(token string) {
 						emitFn(Event{Type: string(EventTokenUpdate), Content: token})
@@ -842,6 +1007,38 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 					return a.provider.Complete(loopCtx, fullMessages, opts)
 				})
 			}
+			// Model fallback: if the error looks model-specific and a fallback model is
+			// configured, retry once with the fallback model.
+			if isFallbackError(turnErr) && a.fallbackModel != "" && opts.Model != a.fallbackModel {
+				fallbackOpts := opts
+				fallbackOpts.Model = a.fallbackModel
+				if tts, ok := a.provider.(ThinkingStreamer); ok && fallbackOpts.ThinkingLevel != ThinkingLevelOff && fallbackOpts.ThinkingLevel != "" {
+					response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+						return tts.CompleteStreamWithThinking(loopCtx, fullMessages, fallbackOpts,
+							func(token string) {
+								emitFn(Event{Type: string(EventTokenUpdate), Content: token})
+							},
+							func(thinking string) {
+								emitFn(Event{Type: string(EventThinkingUpdate), Content: thinking})
+							},
+						)
+					})
+				} else if ts, ok := a.provider.(TokenStreamer); ok {
+					response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+						return ts.CompleteStream(loopCtx, fullMessages, fallbackOpts, func(token string) {
+							emitFn(Event{Type: string(EventTokenUpdate), Content: token})
+						})
+					})
+				} else {
+					response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+						return a.provider.Complete(loopCtx, fullMessages, fallbackOpts)
+					})
+				}
+				if turnErr == nil {
+					emitFn(Event{Type: string(EventMessageUpdate), Content: fmt.Sprintf("[fallback model: %s]", a.fallbackModel)})
+				}
+			}
+
 			if turnErr != nil {
 				emitFn(Event{Type: string(EventError), Content: turnErr.Error(), IsError: true})
 				break
@@ -861,11 +1058,29 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 				break
 			}
 
+			// Stuck-loop detection: abort if the same tool call repeats 3+ times.
+			callKey := fmt.Sprintf("%v", calls)
+			if callKey == lastToolCallKey {
+				sameToolCount++
+				if sameToolCount >= 3 {
+					emitFn(Event{Type: string(EventError), Content: "stuck loop detected: same tool call repeated 3 times", IsError: true})
+					break
+				}
+			} else {
+				lastToolCallKey = callKey
+				sameToolCount = 1
+			}
+
 			toolResultStr := a.executeTools(loopCtx, calls, i, emitFn)
 
 			fullMessages = append(fullMessages, Message{Role: "user", Content: toolResultStr})
 			emitFn(Event{Type: string(EventTurnEnd), Content: ""})
 		}
+
+		// Persist conversation history (excluding system message) for future turns.
+		a.mu.Lock()
+		a.Messages = append([]Message{}, fullMessages[1:]...)
+		a.mu.Unlock()
 	}()
 	return events
 }

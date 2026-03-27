@@ -162,6 +162,27 @@ func ParseAnthropicSSE(data string) (string, bool) {
 	return "", false
 }
 
+// ParseAnthropicSSEThinking extracts incremental thinking tokens from Anthropic SSE.
+// Returns the thinking delta text and true when a thinking_delta event is found.
+//
+//	{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"..."}}
+func ParseAnthropicSSEThinking(data string) (string, bool) {
+	var event struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type     string `json:"type"`
+			Thinking string `json:"thinking"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return "", false
+	}
+	if event.Type == "content_block_delta" && event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+		return event.Delta.Thinking, true
+	}
+	return "", false
+}
+
 func ParseOpenAISSE(data string) (string, bool) {
 	var event struct {
 		Choices []struct {

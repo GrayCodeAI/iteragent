@@ -36,6 +36,37 @@ func (p *openaiCompatProvider) Name() string {
 	return fmt.Sprintf("openai-compat(%s)", p.cfg.Model)
 }
 
+// ContextWindow returns the context window for the configured model.
+func (p *openaiCompatProvider) ContextWindow() int {
+	return openaiCompatContextWindow(p.cfg.Model)
+}
+
+func openaiCompatContextWindow(model string) int {
+	switch {
+	case strings.HasPrefix(model, "gpt-3.5-turbo-instruct"):
+		return 4_096
+	case strings.HasPrefix(model, "gpt-3.5"):
+		return 16_385
+	case model == "gpt-4" || model == "gpt-4-0314":
+		return 8_192
+	case strings.HasPrefix(model, "gpt-4-32k"):
+		return 32_768
+	case strings.HasPrefix(model, "gpt-4-turbo"), strings.HasPrefix(model, "gpt-4o"),
+		strings.HasPrefix(model, "o1"), strings.HasPrefix(model, "o3"):
+		return 128_000
+	case strings.HasPrefix(model, "llama-3"):
+		return 128_000
+	case strings.HasPrefix(model, "llama3"), strings.HasPrefix(model, "llama2"):
+		return 8_192
+	case strings.HasPrefix(model, "mistral"), strings.HasPrefix(model, "mixtral"):
+		return 32_768
+	case strings.HasPrefix(model, "deepseek"):
+		return 128_000
+	default:
+		return 128_000
+	}
+}
+
 type openaiResponse struct {
 	Choices []struct {
 		Message struct {
@@ -68,8 +99,12 @@ func (p *openaiCompatProvider) supportsReasoningEffort() bool {
 
 // buildOpenAIBody constructs the JSON request body for OpenAI-compat completions.
 func (p *openaiCompatProvider) buildOpenAIBody(messages []Message, opt CompletionOptions, stream bool) ([]byte, error) {
+	model := p.cfg.Model
+	if opt.Model != "" {
+		model = opt.Model
+	}
 	reqMap := map[string]interface{}{
-		"model":    p.cfg.Model,
+		"model":    model,
 		"messages": messages,
 		"stream":   stream,
 	}

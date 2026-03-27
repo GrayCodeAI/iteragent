@@ -165,7 +165,7 @@ func TestGetTools_Execute_Success(t *testing.T) {
 	ta := mcp.NewMcpToolAdapter(mcp.NewMcpClient(tr))
 	tools, _ := ta.GetTools(context.Background())
 
-	result, err := tools[0].Execute(context.Background(), map[string]string{"name": "world"})
+	result, err := tools[0].Execute(context.Background(), map[string]interface{}{"name": "world"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -197,8 +197,8 @@ func TestGetTools_Execute_ToolError(t *testing.T) {
 	}
 }
 
-func TestGetTools_Execute_JSONArg(t *testing.T) {
-	// JSON-valued string arg should be unmarshalled to typed value.
+func TestGetTools_Execute_TypedArgs(t *testing.T) {
+	// Typed args should be passed directly to the MCP server.
 	mcpTools := []mcp.Tool{{Name: "typed", Description: ""}}
 	var capturedArgs map[string]interface{}
 	tr := &mockTransport{sendFn: func(_ context.Context, req mcp.JsonRpcRequest) (mcp.JsonRpcResponse, error) {
@@ -216,10 +216,10 @@ func TestGetTools_Execute_JSONArg(t *testing.T) {
 	ta := mcp.NewMcpToolAdapter(mcp.NewMcpClient(tr))
 	tools, _ := ta.GetTools(context.Background())
 
-	tools[0].Execute(context.Background(), map[string]string{
-		"count": "42",       // valid JSON number
-		"name":  "\"alice\"", // valid JSON string
-		"flag":  "true",     // valid JSON bool
+	tools[0].Execute(context.Background(), map[string]interface{}{
+		"count": float64(42),
+		"name":  "alice",
+		"flag":  true,
 	})
 
 	if capturedArgs["count"] != float64(42) {
@@ -230,8 +230,8 @@ func TestGetTools_Execute_JSONArg(t *testing.T) {
 	}
 }
 
-func TestGetTools_Execute_NonJSONArgPassedAsString(t *testing.T) {
-	// Non-JSON string args should be passed through as plain strings.
+func TestGetTools_Execute_StringArgPassedThrough(t *testing.T) {
+	// String args should be passed through as plain strings.
 	mcpTools := []mcp.Tool{{Name: "plain", Description: ""}}
 	var capturedArgs map[string]interface{}
 	tr := &mockTransport{sendFn: func(_ context.Context, req mcp.JsonRpcRequest) (mcp.JsonRpcResponse, error) {
@@ -248,7 +248,7 @@ func TestGetTools_Execute_NonJSONArgPassedAsString(t *testing.T) {
 	ta := mcp.NewMcpToolAdapter(mcp.NewMcpClient(tr))
 	tools, _ := ta.GetTools(context.Background())
 
-	tools[0].Execute(context.Background(), map[string]string{"path": "/some/path"})
+	tools[0].Execute(context.Background(), map[string]interface{}{"path": "/some/path"})
 	if capturedArgs["path"] != "/some/path" {
 		t.Errorf("expected '/some/path', got %v", capturedArgs["path"])
 	}

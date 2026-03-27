@@ -2,6 +2,7 @@ package iteragent
 
 import (
 	"context"
+	"math/rand"
 	"strings"
 	"time"
 )
@@ -47,12 +48,12 @@ func IsRetryable(err error) bool {
 
 	// HTTP status codes that indicate transient server-side problems.
 	retryableStatusCodes := []string{
-		"429",  // Too Many Requests
-		"500",  // Internal Server Error
-		"502",  // Bad Gateway
-		"503",  // Service Unavailable
-		"504",  // Gateway Timeout
-		"529",  // Anthropic overloaded
+		"429", // Too Many Requests
+		"500", // Internal Server Error
+		"502", // Bad Gateway
+		"503", // Service Unavailable
+		"504", // Gateway Timeout
+		"529", // Anthropic overloaded
 	}
 	for _, code := range retryableStatusCodes {
 		// Match "API error 429:", "status 429", "error (429)", "HTTP 429", etc.
@@ -115,6 +116,16 @@ func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
+// jitterDelay returns delay ± 25% random jitter to prevent thundering herd
+// when many concurrent requests all hit a rate limit simultaneously.
+func jitterDelay(d time.Duration) time.Duration {
+	jitter := time.Duration(rand.Int63n(int64(d) / 2)) //nolint:gosec // non-cryptographic jitter is fine
+	if rand.Int63n(2) == 0 {                            //nolint:gosec
+		return d + jitter/2
+	}
+	return d - jitter/2
+}
+
 func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 	var lastErr error
 	delay := cfg.InitialDelay
@@ -134,7 +145,7 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(delay):
+		case <-time.After(jitterDelay(delay)):
 		}
 
 		delay = time.Duration(float64(delay) * cfg.Multiplier)
@@ -167,7 +178,7 @@ func RetryWithResult[T any](ctx context.Context, cfg RetryConfig, fn func() (T, 
 		select {
 		case <-ctx.Done():
 			return zero, ctx.Err()
-		case <-time.After(delay):
+		case <-time.After(jitterDelay(delay)):
 		}
 
 		delay = time.Duration(float64(delay) * cfg.Multiplier)

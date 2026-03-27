@@ -35,6 +35,22 @@ func (p *anthropicProvider) Name() string {
 	return fmt.Sprintf("anthropic(%s)", p.cfg.Model)
 }
 
+// ContextWindow returns the context window for the configured Anthropic model.
+func (p *anthropicProvider) ContextWindow() int {
+	return anthropicContextWindow(p.cfg.Model)
+}
+
+func anthropicContextWindow(model string) int {
+	// All current Claude models support 200k context.
+	// Older claude-instant / claude-2 are 100k.
+	switch {
+	case strings.HasPrefix(model, "claude-instant"), strings.HasPrefix(model, "claude-2"):
+		return 100_000
+	default:
+		return 200_000
+	}
+}
+
 type anthropicResponse struct {
 	Content []struct {
 		Text string `json:"text"`
@@ -75,8 +91,12 @@ func (p *anthropicProvider) buildAnthropicBody(messages []Message, opt Completio
 	if opt.MaxTokens > 0 {
 		maxTokens = opt.MaxTokens
 	}
+	model := p.cfg.Model
+	if opt.Model != "" {
+		model = opt.Model
+	}
 	reqMap := map[string]interface{}{
-		"model":      p.cfg.Model,
+		"model":      model,
 		"max_tokens": maxTokens,
 		"messages":   filtered,
 	}
@@ -92,6 +112,35 @@ func (p *anthropicProvider) buildAnthropicBody(messages []Message, opt Completio
 		} else {
 			reqMap["system"] = system
 		}
+	}
+
+	// Message-level caching: add cache_control to the penultimate message to
+	// cache the conversation history before the current user turn.
+	msgCacheEnabled := opt.CacheConfig != nil && opt.CacheConfig.Enabled && opt.CacheConfig.CacheMessages
+	if msgCacheEnabled && len(filtered) >= 2 {
+		type contentBlock struct {
+			Type         string            `json:"type"`
+			Text         string            `json:"text"`
+			CacheControl map[string]string `json:"cache_control,omitempty"`
+		}
+		type cachedMsg struct {
+			Role    string         `json:"role"`
+			Content []contentBlock `json:"content"`
+		}
+		msgs := make([]interface{}, len(filtered))
+		for i, m := range filtered {
+			if i == len(filtered)-2 {
+				msgs[i] = cachedMsg{
+					Role: m.Role,
+					Content: []contentBlock{
+						{Type: "text", Text: m.Content, CacheControl: map[string]string{"type": "ephemeral"}},
+					},
+				}
+			} else {
+				msgs[i] = map[string]interface{}{"role": m.Role, "content": m.Content}
+			}
+		}
+		reqMap["messages"] = msgs
 	}
 	if opt.ThinkingLevel != ThinkingLevelOff && opt.ThinkingLevel != "" {
 		budget := thinkingBudget(opt.ThinkingLevel)
@@ -125,6 +174,48 @@ func (p *anthropicProvider) CompleteStream(ctx context.Context, messages []Messa
 			full.WriteString(token)
 			if onToken != nil {
 				onToken(token)
+			}
+		}
+	})
+	if err != nil {
+		return "", fmt.Errorf("anthropic stream: %w", err)
+	}
+	result := full.String()
+	if result == "" {
+		return "", fmt.Errorf("empty streaming response from anthropic")
+	}
+	return result, nil
+}
+
+// CompleteStreamWithThinking implements ThinkingStreamer. It delivers both
+// text tokens (via onToken) and thinking tokens (via onThinking) as they
+// arrive. Returns the full concatenated text response.
+func (p *anthropicProvider) CompleteStreamWithThinking(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string), onThinking func(string)) (string, error) {
+	body, err := p.buildAnthropicBody(messages, opt, true)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	headers := map[string]string{
+		"x-api-key":         p.cfg.APIKey,
+		"anthropic-version": "2023-06-01",
+	}
+	if opt.CacheConfig != nil && opt.CacheConfig.Enabled {
+		headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+	}
+
+	var full strings.Builder
+	sseClient := NewSSEClient()
+	err = sseClient.Stream(ctx, "https://api.anthropic.com/v1/messages", headers, body, func(e SSEEvent) {
+		if token, ok := ParseAnthropicSSE(e.Data); ok && token != "" {
+			full.WriteString(token)
+			if onToken != nil {
+				onToken(token)
+			}
+		}
+		if thinking, ok := ParseAnthropicSSEThinking(e.Data); ok && thinking != "" {
+			if onThinking != nil {
+				onThinking(thinking)
 			}
 		}
 	})

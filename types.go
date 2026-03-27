@@ -148,13 +148,14 @@ const (
 
 // ToolExecConfig holds the tool execution strategy and its parameters.
 type ToolExecConfig struct {
-	Strategy  ToolExecutionStrategy
-	BatchSize int // only used for ToolExecBatched
+	Strategy       ToolExecutionStrategy
+	BatchSize      int // only used for ToolExecBatched
+	MaxOutputLines int // cap tool result to this many lines (head+tail); 0 = 200
 }
 
 // DefaultToolExecConfig returns the default tool execution configuration (parallel).
 func DefaultToolExecConfig() ToolExecConfig {
-	return ToolExecConfig{Strategy: ToolExecParallel}
+	return ToolExecConfig{Strategy: ToolExecParallel, MaxOutputLines: 200}
 }
 
 // Legacy string-based constants kept for compatibility.
@@ -244,7 +245,8 @@ const (
 	EventInputRejected       EventType = "input_rejected"
 	EventInputWarned         EventType = "input_warned"
 	EventContextCompacted    EventType = "context_compacted"
-	EventTokenUpdate         EventType = "token_update" // incremental token from streaming provider
+	EventTokenUpdate         EventType = "token_update"    // incremental token from streaming provider
+	EventThinkingUpdate      EventType = "thinking_update" // incremental thinking token (extended thinking)
 	EventError               EventType = "error"
 )
 

@@ -175,7 +175,7 @@ func TestToolAdapterExecute(t *testing.T) {
 	adapter := mcp.NewMcpToolAdapter(client)
 	tools, _ := adapter.GetTools(ctx)
 
-	out, err := tools[0].Execute(ctx, map[string]string{"a": "1", "b": "2"})
+	out, err := tools[0].Execute(ctx, map[string]interface{}{"a": "1", "b": "2"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
