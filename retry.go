@@ -1,3 +1,6 @@
+// Package iteragent is a lightweight, zero-dependency Go agent framework
+// for building LLM-powered applications with multiple provider support,
+// tool use, streaming, and context compaction.
 package iteragent
 
 import (
@@ -6,11 +9,12 @@ import (
 	"time"
 )
 
+// RetryConfig defines the parameters for retry behavior.
 type RetryConfig struct {
-	MaxAttempts  int
-	InitialDelay time.Duration
-	MaxDelay     time.Duration
-	Multiplier   float64
+	MaxAttempts  int           // Maximum number of retry attempts (default: 3)
+	InitialDelay time.Duration // Initial delay between retries (default: 1s)
+	MaxDelay     time.Duration // Maximum delay between retries (default: 30s)
+	Multiplier   float64       // Multiplier applied to delay after each attempt (default: 2.0)
 }
 
 var DefaultRetryConfig = RetryConfig{

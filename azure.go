@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type AzureOpenAIConfig struct {
@@ -28,7 +29,7 @@ type AzureOpenAIProvider struct {
 func NewAzureOpenAI(config AzureOpenAIConfig) *AzureOpenAIProvider {
 	return &AzureOpenAIProvider{
 		config: config,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 

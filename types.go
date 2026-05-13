@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// Version is the current version of the iteragent library.
+const Version = "0.3.0"
+
 type ContentType string
 
 const (
@@ -34,15 +37,24 @@ type ContentToolCall struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// Message represents a single message in a conversation with an LLM.
 type Message struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	Timestamp  int64  `json:"timestamp,omitempty"`
-	Usage      *Usage `json:"usage,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// Role is the message role, such as "system", "user", "assistant", or "tool".
+	Role string `json:"role"`
+	// Content is the message text content.
+	Content string `json:"content"`
+	// Timestamp is the Unix timestamp in milliseconds when the message was created.
+	Timestamp int64 `json:"timestamp,omitempty"`
+	// Usage tracks token usage for this message if provided by the LLM provider.
+	Usage *Usage `json:"usage,omitempty"`
+	// Error holds any error message associated with this message.
+	Error string `json:"error,omitempty"`
+	// StopReason indicates why the LLM stopped generating.
 	StopReason string `json:"stopReason,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Provider   string `json:"provider,omitempty"`
+	// Model is the name of the LLM model that generated this message.
+	Model string `json:"model,omitempty"`
+	// Provider identifies the LLM provider used.
+	Provider string `json:"provider,omitempty"`
 }
 
 func NewUserMessage(content string) Message {
@@ -285,12 +297,18 @@ func (c *DefaultCompactionStrategy) Compact(messages []Message, maxTokens int) [
 	return CompactMessagesTiered(messages, cfg)
 }
 
+// ToolDefinition describes a tool that an LLM can invoke.
 type ToolDefinition struct {
-	Name        string
-	Label       string
+	// Name is the unique identifier for the tool.
+	Name string
+	// Label is a human-readable label shown to the LLM.
+	Label string
+	// Description explains what the tool does, shown to the LLM for tool selection.
 	Description string
-	Parameters  map[string]interface{}
-	Schema      json.RawMessage
+	// Parameters is a map of parameter names to their schema/metadata.
+	Parameters map[string]interface{}
+	// Schema is the raw JSON Schema defining the tool's input format.
+	Schema json.RawMessage
 }
 
 type StreamConfig struct {

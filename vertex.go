@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 type VertexConfig struct {
@@ -28,7 +29,7 @@ type VertexProvider struct {
 func NewVertex(config VertexConfig) *VertexProvider {
 	return &VertexProvider{
 		config: config,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -115,7 +116,10 @@ func (p *VertexProvider) Complete(ctx context.Context, messages []Message, opts 
 		body["temperature"] = p.config.Temperature
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
@@ -208,7 +212,10 @@ func (p *VertexProvider) CompleteStream(ctx context.Context, messages []Message,
 	if opt.Temperature > 0 {
 		body["temperature"] = opt.Temperature
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
 
 	var full strings.Builder
 	sseClient := NewSSEClient()
@@ -268,7 +275,10 @@ func (p *VertexProvider) Stream(ctx context.Context, config StreamConfig, messag
 		body["temperature"] = config.Temperature
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return Message{}, fmt.Errorf("marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {

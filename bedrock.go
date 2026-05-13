@@ -31,7 +31,7 @@ type BedrockProvider struct {
 func NewBedrock(config BedrockConfig) *BedrockProvider {
 	return &BedrockProvider{
 		config: config,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -177,7 +177,10 @@ func (p *BedrockProvider) Stream(ctx context.Context, config StreamConfig, messa
 		body["temperature"] = config.Temperature
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return Message{}, fmt.Errorf("marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {

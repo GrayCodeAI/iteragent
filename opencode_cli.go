@@ -115,7 +115,6 @@ func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, on
 
 	// Read plain text output from opencode run
 	var fullResponse strings.Builder
-	var lastErr error
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
@@ -145,10 +144,6 @@ func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, on
 			return "", fmt.Errorf("opencode exited with error: %w, stderr: %s", err, stderr)
 		}
 		return "", fmt.Errorf("opencode exited with error: %w", err)
-	}
-
-	if lastErr != nil {
-		return "", lastErr
 	}
 
 	result := fullResponse.String()

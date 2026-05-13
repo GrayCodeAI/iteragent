@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type SSEEvent struct {
@@ -23,7 +24,7 @@ type SSEClient struct {
 
 func NewSSEClient() *SSEClient {
 	return &SSEClient{
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 

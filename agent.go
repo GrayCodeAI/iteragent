@@ -1,3 +1,6 @@
+// Package iteragent is a lightweight, zero-dependency Go agent framework
+// for building LLM-powered applications with multiple provider support,
+// tool use, streaming, and context compaction.
 package iteragent
 
 import (
