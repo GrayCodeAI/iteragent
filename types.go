@@ -169,13 +169,6 @@ func DefaultToolExecConfig() ToolExecConfig {
 	return ToolExecConfig{Strategy: ToolExecParallel}
 }
 
-// Legacy string-based constants kept for compatibility.
-const (
-	ToolExecTypeParallel   = "parallel"
-	ToolExecTypeSequential = "sequential"
-	ToolExecTypeBatched    = "batched"
-)
-
 func NewParallelStrategy() ToolExecConfig {
 	return ToolExecConfig{Strategy: ToolExecParallel}
 }

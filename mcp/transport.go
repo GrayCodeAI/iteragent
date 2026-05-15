@@ -114,6 +114,9 @@ func (t *StdioTransport) Send(ctx context.Context, request JsonRpcRequest) (Json
 	}
 
 	// Read response line with context cancellation support.
+	// Note: the goroutine may continue blocking on ReadBytes after
+	// context cancellation. It completes when the process is killed
+	// via Close(), or when it receives a response line.
 	type readResult struct {
 		resp JsonRpcResponse
 		err  error
@@ -122,15 +125,24 @@ func (t *StdioTransport) Send(ctx context.Context, request JsonRpcRequest) (Json
 	go func() {
 		line, err := t.stdout.ReadBytes('\n')
 		if err != nil {
-			ch <- readResult{err: fmt.Errorf("read response: %w", err)}
+			select {
+			case ch <- readResult{err: fmt.Errorf("read response: %w", err)}:
+			default:
+			}
 			return
 		}
 		var resp JsonRpcResponse
 		if err := json.Unmarshal(bytes.TrimSpace(line), &resp); err != nil {
-			ch <- readResult{err: fmt.Errorf("parse response: %w", err)}
+			select {
+			case ch <- readResult{err: fmt.Errorf("parse response: %w", err)}:
+			default:
+			}
 			return
 		}
-		ch <- readResult{resp: resp}
+		select {
+		case ch <- readResult{resp: resp}:
+		default:
+		}
 	}()
 
 	select {

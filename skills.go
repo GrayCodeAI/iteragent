@@ -138,12 +138,6 @@ func parseSkillFile(content string) (name, desc, frontmatter, body string) {
 	return
 }
 
-// parseSkillFrontmatter is kept for backward compatibility.
-func parseSkillFrontmatter(content string) (name, desc string) {
-	name, desc, _, _ = parseSkillFile(content)
-	return
-}
-
 // FormatForPrompt returns an XML <available_skills> block listing skill metadata.
 // Only name and description are included — the full content is NOT injected.
 // The LLM can request full skill content via the read_file tool.

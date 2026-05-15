@@ -2,7 +2,6 @@ package iteragent
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -347,49 +346,4 @@ func CompactMessagesTiered(messages []Message, cfg ContextConfig) []Message {
 	head := compacted[:keepFirst]
 	tail := compacted[len(compacted)-keepRecent:]
 	return append(head[:len(head):len(head)], tail...)
-}
-
-type MessageSummary struct {
-	Content    string
-	TokenCount int
-}
-
-func SummarizeMessages(messages []Message) []Message {
-	if len(messages) <= 10 {
-		return messages
-	}
-
-	var summary []Message
-	summary = append(summary, messages[0])
-
-	midStart := len(messages) / 3
-	midEnd := 2 * len(messages) / 3
-
-	if midStart < len(messages) && midEnd > midStart {
-		midSection := messages[midStart:midEnd]
-		summary = append(summary, Message{
-			Role:    "system",
-			Content: fmt.Sprintf("[%d messages omitted]", len(midSection)),
-		})
-	}
-
-	summary = append(summary, messages[len(messages)-1:]...)
-
-	return summary
-}
-
-func TruncateToolOutput(content string, maxTokens int) string {
-	maxChars := maxTokens * charsPerToken
-	if len(content) <= maxChars {
-		return content
-	}
-	return content[:maxChars] + "\n\n[Output truncated]"
-}
-
-func CalculateTokenBuffer(currentTokens, maxTokens int) int {
-	return maxTokens - currentTokens
-}
-
-func EstimateResponseTokens(availableTokens int) int {
-	return int(math.Min(float64(availableTokens*2/3), 4096))
 }
