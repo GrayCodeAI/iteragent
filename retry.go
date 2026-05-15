@@ -29,6 +29,9 @@ type RetryableError struct {
 }
 
 func (e *RetryableError) Error() string {
+	if e.Err == nil {
+		return "retryable error"
+	}
 	return e.Err.Error()
 }
 
@@ -124,6 +127,12 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 	delay := cfg.InitialDelay
 
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		err := fn()
 		if err == nil {
 			return nil
@@ -157,6 +166,12 @@ func RetryWithResult[T any](ctx context.Context, cfg RetryConfig, fn func() (T, 
 	delay := cfg.InitialDelay
 
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		default:
+		}
+
 		result, err := fn()
 		if err == nil {
 			return result, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ExecutableTool is an MCP tool ready to be called from iteragent.
@@ -74,21 +75,23 @@ func (a *ToolAdapter) GetTools(ctx context.Context) ([]ExecutableTool, error) {
 					return "", err
 				}
 
-				if result.IsError {
-					var errMsg string
-					for _, c := range result.Content {
-						errMsg += c.Text + "\n"
-					}
-					return "", fmt.Errorf("mcp tool error: %s", errMsg)
-				}
-
-				var output string
+			if result.IsError {
+				var errMsg strings.Builder
 				for _, c := range result.Content {
-					if c.Text != "" {
-						output += c.Text + "\n"
-					}
+					errMsg.WriteString(c.Text)
+					errMsg.WriteString("\n")
 				}
-				return output, nil
+				return "", fmt.Errorf("mcp tool error: %s", errMsg.String())
+			}
+
+			var output strings.Builder
+			for _, c := range result.Content {
+				if c.Text != "" {
+					output.WriteString(c.Text)
+					output.WriteString("\n")
+				}
+			}
+			return output.String(), nil
 			},
 		}
 	}

@@ -62,7 +62,7 @@ func (c *SSEClient) Stream(ctx context.Context, url string, headers map[string]s
 			break
 		}
 		if err != nil {
-			break
+			return fmt.Errorf("SSE read error: %w", err)
 		}
 
 		line = strings.TrimRight(line, "\r\n")

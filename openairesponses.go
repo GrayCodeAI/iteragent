@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type OpenAIResponsesConfig struct {
@@ -27,7 +28,7 @@ type OpenAIResponsesProvider struct {
 func NewOpenAIResponses(config OpenAIResponsesConfig) Provider {
 	return &OpenAIResponsesProvider{
 		config: config,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 

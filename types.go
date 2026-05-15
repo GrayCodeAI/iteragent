@@ -3,6 +3,7 @@ package iteragent
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -106,11 +107,10 @@ type Usage struct {
 }
 
 func (u *Usage) CacheHitRate() float64 {
-	totalInput := u.InputTokens + u.CacheRead + u.CacheWrite
-	if totalInput == 0 {
+	if u.InputTokens == 0 {
 		return 0.0
 	}
-	return float64(u.CacheRead) / float64(totalInput)
+	return float64(u.CacheRead) / float64(u.InputTokens)
 }
 
 type ThinkingLevel string
@@ -392,6 +392,7 @@ func (e *ProviderError) Error() string {
 }
 
 type ProviderRegistry struct {
+	mu        sync.RWMutex
 	providers map[ApiProtocol]StreamProvider
 }
 
@@ -402,20 +403,28 @@ func NewProviderRegistry() *ProviderRegistry {
 }
 
 func (r *ProviderRegistry) Register(protocol ApiProtocol, provider StreamProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.providers[protocol] = provider
 }
 
 func (r *ProviderRegistry) Get(protocol ApiProtocol) (StreamProvider, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	p, ok := r.providers[protocol]
 	return p, ok
 }
 
 func (r *ProviderRegistry) Has(protocol ApiProtocol) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.providers[protocol]
 	return ok
 }
 
 func (r *ProviderRegistry) Protocols() []ApiProtocol {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	protocols := make([]ApiProtocol, 0, len(r.providers))
 	for p := range r.providers {
 		protocols = append(protocols, p)

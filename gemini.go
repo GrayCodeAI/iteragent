@@ -117,12 +117,13 @@ func (p *geminiProvider) CompleteStream(ctx context.Context, messages []Message,
 	}
 
 	streamURL := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?key=%s&alt=sse",
-		p.cfg.Model, p.cfg.APIKey)
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse",
+		p.cfg.Model)
 
 	var full strings.Builder
 	sseClient := NewSSEClient()
-	err = sseClient.Stream(ctx, streamURL, nil, body, func(e SSEEvent) {
+	headers := map[string]string{"X-Goog-Api-Key": p.cfg.APIKey}
+	err = sseClient.Stream(ctx, streamURL, headers, body, func(e SSEEvent) {
 		if token, ok := ParseGeminiSSE(e.Data); ok && token != "" {
 			full.WriteString(token)
 			if onToken != nil {
@@ -151,12 +152,13 @@ func (p *geminiProvider) Complete(ctx context.Context, messages []Message, opts 
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.cfg.Model, p.cfg.APIKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", p.cfg.Model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-Api-Key", p.cfg.APIKey)
 
 	resp, err := p.client.Do(req)
 	if err != nil {

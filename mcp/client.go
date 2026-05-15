@@ -79,11 +79,14 @@ func (c *Client) post(ctx context.Context, body []byte) (json.RawMessage, error)
 
 // ListTools lists the tools available on the MCP server.
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/list",
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	raw, err := c.post(ctx, body)
 	if err != nil {
 		return nil, err
@@ -97,7 +100,7 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 
 // CallTool invokes a named tool with the given arguments.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      2,
 		"method":  "tools/call",
@@ -106,6 +109,9 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 			"arguments": args,
 		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	raw, err := c.post(ctx, body)
 	if err != nil {
 		return nil, err
@@ -119,11 +125,14 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 // Ping checks if the server responds.
 func (c *Client) Ping(ctx context.Context) error {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, err := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      0,
 		"method":  "ping",
 	})
-	_, err := c.post(ctx, body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+	_, err = c.post(ctx, body)
 	return err
 }

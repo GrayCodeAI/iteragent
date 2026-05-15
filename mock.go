@@ -60,7 +60,7 @@ func (p *MockProvider) Stream(ctx context.Context, config StreamConfig, messages
 		return Message{}, p.error
 	}
 
-	for _, char := range strings.Split(p.response, "") {
+	for _, char := range p.response {
 		select {
 		case <-ctx.Done():
 			return Message{}, ctx.Err()
@@ -68,7 +68,7 @@ func (p *MockProvider) Stream(ctx context.Context, config StreamConfig, messages
 		}
 		onEvent(StreamEvent{
 			Type:    StreamEventContent,
-			Content: char,
+			Content: string(char),
 		})
 	}
 

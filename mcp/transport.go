@@ -150,7 +150,8 @@ func (t *StdioTransport) Send(ctx context.Context, request JsonRpcRequest) (Json
 func (t *StdioTransport) Close() error {
 	_ = t.stdin.Close()
 	if t.cmd != nil && t.cmd.Process != nil {
-		return t.cmd.Process.Kill()
+		_ = t.cmd.Process.Kill()
+		_ = t.cmd.Wait()
 	}
 	return nil
 }

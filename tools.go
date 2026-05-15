@@ -7,32 +7,51 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-var protectedPaths []string
+var (
+	protectedPaths   []string
+	protectedPathsMu sync.RWMutex
 
-var dangerousPatterns = []string{
-	"rm -rf",
-	"git push --force",
-	"git push -f",
-	"--force-with-lease",
-	"chmod -R 777",
-	"> /etc/",
-	"curl .* | sh",
-	"wget .* | sh",
+	dangerousPatterns []*regexp.Regexp
+	dangerousPatternsMu sync.RWMutex
+)
+
+func init() {
+	patterns := []string{
+		`\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\b`,
+		`\bchmod\s+-R\s+777\b`,
+		`>\s*/etc/`,
+		`\bcurl\b.*\|\s*(ba)?sh\b`,
+		`\bwget\b.*\|\s*(ba)?sh\b`,
+	}
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err == nil {
+			dangerousPatterns = append(dangerousPatterns, re)
+		}
+	}
 }
 
 func SetProtectedPaths(paths []string) {
+	protectedPathsMu.Lock()
+	defer protectedPathsMu.Unlock()
 	protectedPaths = paths
 }
 
 func GetProtectedPaths() []string {
+	protectedPathsMu.RLock()
+	defer protectedPathsMu.RUnlock()
 	return protectedPaths
 }
 
 func isPathProtected(path string) bool {
+	protectedPathsMu.RLock()
+	defer protectedPathsMu.RUnlock()
 	for _, p := range protectedPaths {
 		if strings.HasPrefix(path, p) {
 			return true
@@ -42,8 +61,10 @@ func isPathProtected(path string) bool {
 }
 
 func isCommandDangerous(cmd string) bool {
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(cmd, pattern) {
+	dangerousPatternsMu.RLock()
+	defer dangerousPatternsMu.RUnlock()
+	for _, re := range dangerousPatterns {
+		if re.MatchString(cmd) {
 			return true
 		}
 	}
@@ -53,16 +74,19 @@ func isCommandDangerous(cmd string) bool {
 // safeJoin joins repoPath with the user-supplied relative path and ensures the
 // result stays within repoPath, preventing path traversal attacks.
 func safeJoin(repoPath, rel string) (string, error) {
-	joined := filepath.Join(repoPath, rel)
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid repo path: %w", err)
 	}
+	absRepo = filepath.Clean(absRepo) + string(filepath.Separator)
+
+	joined := filepath.Join(repoPath, rel)
 	absJoined, err := filepath.Abs(joined)
 	if err != nil {
 		return "", fmt.Errorf("invalid path: %w", err)
 	}
-	if !strings.HasPrefix(absJoined, absRepo+string(filepath.Separator)) && absJoined != absRepo {
+	absJoined = filepath.Clean(absJoined)
+	if !strings.HasPrefix(absJoined, absRepo) {
 		return "", fmt.Errorf("path %q is outside the repository", rel)
 	}
 	return absJoined, nil
@@ -188,14 +212,16 @@ func EditFileTool(repoPath string) Tool {
 	}
 }
 
-func ListFilesTool(repoPath string) Tool {
+	func ListFilesTool(repoPath string) Tool {
 	return Tool{
 		Name:        "list_files",
 		Description: "List all files in the repo.\nArgs: {}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
 			var files []string
+			var walkErr error
 			err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
+					walkErr = err
 					return nil
 				}
 				if info.IsDir() && (info.Name() == ".git" || info.Name() == "vendor" || info.Name() == "node_modules") {
@@ -205,7 +231,10 @@ func ListFilesTool(repoPath string) Tool {
 				files = append(files, rel)
 				return nil
 			})
-			return strings.Join(files, "\n"), err
+			if err != nil {
+				return strings.Join(files, "\n"), err
+			}
+			return strings.Join(files, "\n"), walkErr
 		},
 	}
 }
@@ -228,7 +257,7 @@ func SearchTool(repoPath string) Tool {
 				}
 			}
 
-			c := exec.CommandContext(ctx, "grep", "-r", "-n", pattern, path)
+			c := exec.CommandContext(ctx, "grep", "-r", "-n", "--", pattern, path)
 			c.Dir = repoPath
 			out, err := c.CombinedOutput()
 			return string(out), err
@@ -249,11 +278,22 @@ func GitDiffTool(repoPath string) Tool {
 	}
 }
 
-func GitCommitTool(repoPath string) Tool {
+	func GitCommitTool(repoPath string) Tool {
 	return Tool{
 		Name:        "git_commit",
 		Description: "Stage all changes and commit.\nArgs: {\"message\": \"feat: improve error handling\"}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+			// Check if there are any changes to commit.
+			status := exec.CommandContext(ctx, "git", "status", "--porcelain")
+			status.Dir = repoPath
+			statusOut, err := status.CombinedOutput()
+			if err != nil {
+				return string(statusOut), fmt.Errorf("git status: %w", err)
+			}
+			if len(bytes.TrimSpace(statusOut)) == 0 {
+				return "nothing to commit", nil
+			}
+
 			msg := args["message"]
 			if msg == "" {
 				msg = fmt.Sprintf("iterate: auto-improvement session %s", time.Now().Format("2006-01-02"))

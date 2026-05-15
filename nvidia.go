@@ -35,10 +35,21 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts 
 		url = url + "/chat/completions"
 	}
 
+	var opt CompletionOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	reqBody := map[string]interface{}{
 		"model":    p.cfg.Model,
 		"messages": messages,
 		"stream":   false,
+	}
+	if opt.MaxTokens > 0 {
+		reqBody["max_tokens"] = opt.MaxTokens
+	}
+	if opt.Temperature > 0 {
+		reqBody["temperature"] = opt.Temperature
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -65,7 +76,7 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts 
 		return "", fmt.Errorf("read response: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("nvidia API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 

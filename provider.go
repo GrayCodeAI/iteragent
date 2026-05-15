@@ -159,7 +159,7 @@ func NewProvider(providerName string, apiKey ...string) (Provider, error) {
 	default:
 		baseURL := os.Getenv("ITERATE_BASE_URL")
 		if baseURL == "" {
-			return nil, fmt.Errorf("unknown provider %q — set ITERATE_BASE_URL for custom endpoints", providerName)
+			return nil, fmt.Errorf("unknown provider %q — supported: ollama, openai, anthropic, groq, gemini, nvidia, opencode, opencode-cli; or set ITERATE_BASE_URL for custom endpoints", providerName)
 		}
 		key := providedKey
 		if key == "" {

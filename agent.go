@@ -6,6 +6,7 @@ package iteragent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,11 @@ import (
 	"github.com/GrayCodeAI/iteragent/mcp"
 	"github.com/GrayCodeAI/iteragent/openapi"
 )
+
+// ErrUnknownTool is returned when a tool call references a tool that is not registered.
+var ErrUnknownTool = errors.New("unknown tool")
+
+const maxAgentIterations = 20
 
 // ToolCall represents a tool invocation.
 type ToolCall struct {
@@ -57,6 +63,7 @@ type AgentHooks struct {
 type Agent struct {
 	provider      Provider
 	tools         map[string]Tool
+	toolsMu       sync.RWMutex
 	logger        *slog.Logger
 	Events        chan Event
 	SystemPrompt  string
@@ -185,13 +192,24 @@ func (a *Agent) executeToolsSequential(ctx context.Context, calls []ToolCall, it
 	var toolResults strings.Builder
 	for _, call := range calls {
 		result, isError := a.executeSingleTool(ctx, call, iteration, emitFn)
-		if isError && result == fmt.Sprintf("unknown tool: %s", call.Tool) {
+		if isError && errors.Is(isErrorToErr(isError, result), ErrUnknownTool) {
 			toolResults.WriteString(fmt.Sprintf("Tool %s: %s\n", call.Tool, result))
 		} else {
 			toolResults.WriteString(fmt.Sprintf("Tool %s result:\n%s\n\n", call.Tool, result))
 		}
 	}
 	return toolResults.String()
+}
+
+// isErrorToErr converts the (result, isErrorBool) pair back to an error for checking.
+func isErrorToErr(isError bool, result string) error {
+	if !isError {
+		return nil
+	}
+	if strings.HasPrefix(result, "unknown tool:") {
+		return ErrUnknownTool
+	}
+	return errors.New(result)
 }
 
 func (a *Agent) executeToolsParallel(ctx context.Context, calls []ToolCall, iteration int, emitFn func(Event)) string {
@@ -213,11 +231,13 @@ func (a *Agent) executeToolsParallel(ctx context.Context, calls []ToolCall, iter
 				ToolName:   c.Tool,
 				ToolCallID: fmt.Sprintf("%s-%d-%d", c.Tool, iteration, i),
 			})
+			a.toolsMu.RLock()
 			tool, ok := a.tools[c.Tool]
+			a.toolsMu.RUnlock()
 			if !ok {
 				res := fmt.Sprintf("unknown tool: %s", c.Tool)
 				if a.hooks.OnToolEnd != nil {
-					a.hooks.OnToolEnd(c.Tool, res, fmt.Errorf("unknown tool: %s", c.Tool))
+					a.hooks.OnToolEnd(c.Tool, res, ErrUnknownTool)
 				}
 				results[i] = indexedResult{call: c, result: res, isError: true, unknown: true}
 				emitFn(Event{Type: string(EventToolExecutionEnd), ToolName: c.Tool, Result: results[i].result, IsError: true})
@@ -272,7 +292,9 @@ func (a *Agent) executeToolsBatched(ctx context.Context, calls []ToolCall, itera
 // executeSingleTool runs one tool call and emits start/end events.
 // Returns (result string, isError bool).
 func (a *Agent) executeSingleTool(ctx context.Context, call ToolCall, iteration int, emitFn func(Event)) (string, bool) {
+	a.toolsMu.RLock()
 	tool, ok := a.tools[call.Tool]
+	a.toolsMu.RUnlock()
 	if !ok {
 		result := fmt.Sprintf("unknown tool: %s", call.Tool)
 		emitFn(Event{Type: string(EventToolExecutionEnd), ToolName: call.Tool, Result: result, IsError: true})
@@ -330,10 +352,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 	}
 	userMessage = filtered
 
-	allTools := make([]Tool, 0, len(a.tools))
-	for _, t := range a.tools {
-		allTools = append(allTools, t)
-	}
+	allTools := a.GetTools()
 
 	messages := []Message{
 		{Role: "system", Content: systemPrompt + "\n\n" + ToolDescriptions(allTools)},
@@ -342,8 +361,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 
 	opts := a.completionOpts()
 
-	const maxIterations = 20
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; i < maxAgentIterations; i++ {
 		a.logger.Info("agent iteration", "step", i+1)
 		emit(Event{Type: string(EventTurnStart), Content: fmt.Sprintf("turn %d", i+1)})
 
@@ -401,7 +419,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 		emit(Event{Type: string(EventTurnEnd), Content: ""})
 	}
 
-	return "", fmt.Errorf("agent exceeded max iterations (%d)", maxIterations)
+	return "", fmt.Errorf("agent exceeded max iterations (%d)", maxAgentIterations)
 }
 
 func (a *Agent) emit(e Event) {
@@ -517,11 +535,15 @@ func (a *Agent) WithTools(tools []Tool) *Agent {
 	for _, t := range tools {
 		toolMap[t.Name] = t
 	}
+	a.toolsMu.Lock()
 	a.tools = toolMap
+	a.toolsMu.Unlock()
 	return a
 }
 
 func (a *Agent) GetTools() []Tool {
+	a.toolsMu.RLock()
+	defer a.toolsMu.RUnlock()
 	tools := make([]Tool, 0, len(a.tools))
 	for _, t := range a.tools {
 		tools = append(tools, t)
@@ -530,7 +552,9 @@ func (a *Agent) GetTools() []Tool {
 }
 
 func (a *Agent) AddTool(tool Tool) *Agent {
+	a.toolsMu.Lock()
 	a.tools[tool.Name] = tool
+	a.toolsMu.Unlock()
 	return a
 }
 
@@ -601,6 +625,7 @@ func (a *Agent) registerMcpTools(ctx context.Context, adapter *mcp.ToolAdapter) 
 	if err != nil {
 		return nil, fmt.Errorf("list mcp tools: %w", err)
 	}
+	a.toolsMu.Lock()
 	for _, t := range tools {
 		execute := t.Execute
 		a.tools[t.Name] = Tool{
@@ -609,6 +634,7 @@ func (a *Agent) registerMcpTools(ctx context.Context, adapter *mcp.ToolAdapter) 
 			Execute:     execute,
 		}
 	}
+	a.toolsMu.Unlock()
 	// Track the client so Close() can shut it down.
 	if client := adapter.Client(); client != nil {
 		a.mu.Lock()
@@ -668,6 +694,7 @@ func (a *Agent) registerOpenApiTools(adapter *openapi.Adapter) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list openapi tools: %w", err)
 	}
+	a.toolsMu.Lock()
 	for _, t := range tools {
 		execute := t.Execute
 		a.tools[t.Name] = Tool{
@@ -676,6 +703,7 @@ func (a *Agent) registerOpenApiTools(adapter *openapi.Adapter) (*Agent, error) {
 			Execute:     execute,
 		}
 	}
+	a.toolsMu.Unlock()
 	return a, nil
 }
 
@@ -731,6 +759,9 @@ func (a *Agent) Prompt(ctx context.Context, text string) chan Event {
 	a.pendingWg.Add(1)
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				emitFn(Event{Type: string(EventError), Content: fmt.Sprintf("panic: %v", r), IsError: true})
+			}
 			a.pendingWg.Done()
 			a.mu.Lock()
 			a.isStreaming = false
@@ -776,6 +807,9 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 	a.pendingWg.Add(1)
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				emitFn(Event{Type: string(EventError), Content: fmt.Sprintf("panic: %v", r), IsError: true})
+			}
 			a.pendingWg.Done()
 			a.mu.Lock()
 			a.isStreaming = false
@@ -812,7 +846,7 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 
 		opts := a.completionOpts()
 
-		for i := 0; i < 20; i++ {
+		for i := 0; i < maxAgentIterations; i++ {
 			// Check for cancellation before each turn.
 			select {
 			case <-loopCtx.Done():

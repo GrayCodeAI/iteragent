@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -63,7 +64,11 @@ func openaiReasoningEffort(level ThinkingLevel) string {
 
 // supportsReasoningEffort returns true if the base URL is an OpenAI endpoint.
 func (p *openaiCompatProvider) supportsReasoningEffort() bool {
-	return strings.Contains(p.cfg.BaseURL, "openai.com")
+	u, err := url.Parse(p.cfg.BaseURL)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(u.Hostname(), "openai.com")
 }
 
 // buildOpenAIBody constructs the JSON request body for OpenAI-compat completions.

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -51,12 +50,8 @@ func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts
 		if msg.Role == "system" {
 			systemPrompts = append(systemPrompts, map[string]string{"text": msg.Content})
 		} else {
-			role := msg.Role
-			if role == "assistant" {
-				role = "assistant"
-			}
 			convMessages = append(convMessages, map[string]interface{}{
-				"role": role,
+				"role": msg.Role,
 				"content": []map[string]string{
 					{"text": msg.Content},
 				},
@@ -225,20 +220,14 @@ func (p *BedrockProvider) Stream(ctx context.Context, config StreamConfig, messa
 func (p *BedrockProvider) signRequest(req *http.Request, payload string) {
 	now := time.Now().UTC()
 	date := now.Format("20060102T150405Z")
-	amzDate := os.Getenv("AWS_AMZ_DATE")
-	if amzDate != "" {
-		date = amzDate
-	}
 
 	region := p.config.Region
 	service := "bedrock"
 
 	req.Header.Set("X-Amz-Date", date)
-	req.Header.Set("X-Amz-Target", "AmazonBedrockRuntime.Converse")
 
 	host := req.Host
 	if host == "" {
-		// Strip port if present, use full hostname (not just first segment).
 		host = req.URL.Hostname()
 	}
 
@@ -248,9 +237,8 @@ func (p *BedrockProvider) signRequest(req *http.Request, payload string) {
 		"content-type:application/json",
 		fmt.Sprintf("host:%s", host),
 		fmt.Sprintf("x-amz-date:%s", date),
-		fmt.Sprintf("x-amz-target:AmazonBedrockRuntime.Converse"),
 	}
-	signedHeaders := "content-type;host;x-amz-date;x-amz-target"
+	signedHeaders := "content-type;host;x-amz-date"
 
 	canonicalRequest := strings.Join([]string{
 		"POST",
@@ -290,9 +278,4 @@ func hmacSHA256(key []byte, data string) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write([]byte(data))
 	return h.Sum(nil)
-}
-
-func init() {
-	registry := NewProviderRegistry()
-	registry.Register(ProtocolBedrock, &BedrockProvider{})
 }

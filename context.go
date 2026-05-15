@@ -11,7 +11,10 @@ import (
 const charsPerToken = 4
 
 func EstimateTokens(text string) int {
-	return len(text) / charsPerToken
+	if len(text) == 0 {
+		return 0
+	}
+	return (len(text) + charsPerToken - 1) / charsPerToken
 }
 
 func EstimateMessageTokens(msg Message) int {
@@ -343,7 +346,7 @@ func CompactMessagesTiered(messages []Message, cfg ContextConfig) []Message {
 
 	head := compacted[:keepFirst]
 	tail := compacted[len(compacted)-keepRecent:]
-	return append(head, tail...)
+	return append(head[:len(head):len(head)], tail...)
 }
 
 type MessageSummary struct {

@@ -38,29 +38,18 @@ func (p *VertexProvider) Name() string {
 }
 
 func (p *VertexProvider) getAccessToken(ctx context.Context) (string, error) {
+	tokenSrc := os.Getenv("GOOGLE_ACCESS_TOKEN")
+	if tokenSrc != "" {
+		return tokenSrc, nil
+	}
+
 	credFile := p.config.Credentials
 	if credFile == "" {
 		credFile = os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	}
 
 	if credFile != "" {
-		data, err := os.ReadFile(credFile)
-		if err != nil {
-			return "", err
-		}
-		var creds struct {
-			ClientEmail string `json:"client_email"`
-			PrivateKey  string `json:"private_key"`
-		}
-		if err := json.Unmarshal(data, &creds); err != nil {
-			return "", err
-		}
-		return "", fmt.Errorf("service account credentials file found but JWT signing is not implemented; set GOOGLE_ACCESS_TOKEN instead")
-	}
-
-	tokenSrc := os.Getenv("GOOGLE_ACCESS_TOKEN")
-	if tokenSrc != "" {
-		return tokenSrc, nil
+		return "", fmt.Errorf("service account credentials file found but JWT signing is not implemented; use gcloud auth or set GOOGLE_ACCESS_TOKEN instead")
 	}
 
 	return "", fmt.Errorf("no credentials found for Vertex AI")

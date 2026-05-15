@@ -259,10 +259,10 @@ func TestContextTracker_CacheHitRate(t *testing.T) {
 	}
 	ct.UpdateWithRealUsage(usage)
 
-	// CacheHitRate = CacheRead / (InputTokens + CacheRead + CacheWrite) = 40/100 = 0.4
+	// CacheHitRate = CacheRead / InputTokens = 40/60 ≈ 0.667
 	got := ct.CacheHitRate()
-	if got < 0.39 || got > 0.41 {
-		t.Errorf("expected ~0.4 cache hit rate, got %f", got)
+	if got < 0.66 || got > 0.68 {
+		t.Errorf("expected ~0.667 cache hit rate, got %f", got)
 	}
 }
 

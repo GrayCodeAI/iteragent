@@ -232,21 +232,21 @@ func (p *AzureOpenAIProvider) Stream(ctx context.Context, config StreamConfig, m
 
 type SSEDecoder struct {
 	reader io.Reader
+	buf    []byte
 }
 
 func NewSSEDecoder(reader io.Reader) *SSEDecoder {
-	return &SSEDecoder{reader: reader}
+	return &SSEDecoder{reader: reader, buf: make([]byte, 1024)}
 }
 
 func (d *SSEDecoder) Decode() (StreamEvent, error) {
 	var line string
 	for {
-		buf := make([]byte, 1024)
-		n, err := d.reader.Read(buf)
+		n, err := d.reader.Read(d.buf)
 		if n == 0 || err != nil {
 			return StreamEvent{}, err
 		}
-		line = string(buf[:n])
+		line = string(d.buf[:n])
 		if strings.HasPrefix(line, "data:") {
 			break
 		}
