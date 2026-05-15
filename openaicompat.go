@@ -25,7 +25,7 @@ type openaiCompatProvider struct {
 }
 
 // NewOpenAICompat returns an OpenAI-compatible provider.
-// The returned provider implements both Provider and TokenStreamer.
+// The returned provider implements Provider with streaming support.
 func NewOpenAICompat(cfg OpenAICompatConfig) Provider {
 	return &openaiCompatProvider{
 		cfg:    cfg,
@@ -92,7 +92,7 @@ func (p *openaiCompatProvider) buildOpenAIBody(messages []Message, opt Completio
 	return json.Marshal(reqMap)
 }
 
-// CompleteStream implements TokenStreamer using OpenAI SSE format.
+// CompleteStream implements Provider using OpenAI SSE format.
 func (p *openaiCompatProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	body, err := p.buildOpenAIBody(messages, opt, true)
 	if err != nil {

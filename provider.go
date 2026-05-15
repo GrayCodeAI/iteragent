@@ -20,17 +20,10 @@ type CompletionOptions struct {
 // Provider is the unified LLM interface.
 type Provider interface {
 	Complete(ctx context.Context, messages []Message, opts ...CompletionOptions) (string, error)
-	Name() string
-}
-
-// TokenStreamer is an optional interface providers can implement to deliver
-// incremental token output. When a provider implements this interface the
-// agent will call CompleteStream instead of Complete, enabling real-time
-// token-by-token streaming to the UI.
-type TokenStreamer interface {
 	// CompleteStream performs a completion and calls onToken for each text
 	// token as it arrives. Returns the full concatenated response.
 	CompleteStream(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(token string)) (string, error)
+	Name() string
 }
 
 // NewProvider returns the provider selected by ITERATE_PROVIDER.

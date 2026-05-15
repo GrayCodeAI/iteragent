@@ -286,27 +286,3 @@ func TestAzureComplete_ContextCancelled(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// SSEDecoder
-// ---------------------------------------------------------------------------
-
-func TestSSEDecoder_ContentEvent(t *testing.T) {
-	data := "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n"
-	decoder := iteragent.NewSSEDecoder(strings.NewReader(data))
-	event, err := decoder.Decode()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if event.Content != "hello" {
-		t.Errorf("expected content 'hello', got %q", event.Content)
-	}
-}
-
-func TestSSEDecoder_DoneSignal(t *testing.T) {
-	import_io := "data: [DONE]\n"
-	decoder := iteragent.NewSSEDecoder(strings.NewReader(import_io))
-	_, err := decoder.Decode()
-	if err == nil {
-		t.Error("expected EOF for [DONE] signal")
-	}
-}

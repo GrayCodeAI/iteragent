@@ -159,7 +159,7 @@ func (p *VertexProvider) Complete(ctx context.Context, messages []Message, opts 
 	return strings.Join(texts, ""), nil
 }
 
-// CompleteStream implements TokenStreamer for Vertex AI using the streamGenerateContent SSE endpoint.
+// CompleteStream implements Provider for Vertex AI using the streamGenerateContent SSE endpoint.
 func (p *VertexProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	location := p.config.Location
 	if location == "" {
@@ -226,83 +226,3 @@ func (p *VertexProvider) CompleteStream(ctx context.Context, messages []Message,
 	return result, nil
 }
 
-func (p *VertexProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
-	location := p.config.Location
-	if location == "" {
-		location = "us-central1"
-	}
-
-	url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:streamGenerateContent",
-		location, p.config.ProjectID, location, p.config.Model)
-
-	token, err := p.getAccessToken(ctx)
-	if err != nil {
-		return Message{}, err
-	}
-
-	var contents []map[string]interface{}
-	for _, m := range messages {
-		role := "user"
-		if m.Role == "assistant" {
-			role = "model"
-		}
-		contents = append(contents, map[string]interface{}{
-			"role": role,
-			"parts": []map[string]string{
-				{"text": m.Content},
-			},
-		})
-	}
-
-	body := map[string]interface{}{
-		"contents": contents,
-	}
-	if config.MaxTokens > 0 {
-		body["maxOutputTokens"] = config.MaxTokens
-	}
-	if config.Temperature > 0 {
-		body["temperature"] = config.Temperature
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return Message{}, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return Message{}, err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return Message{}, err
-	}
-	defer resp.Body.Close()
-
-	var content strings.Builder
-
-	decoder := NewSSEDecoder(resp.Body)
-	for {
-		event, err := decoder.Decode()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-
-		if event.Type == "content" {
-			content.WriteString(event.Content)
-			onEvent(event)
-		}
-	}
-
-	return Message{
-		Role:    "assistant",
-		Content: content.String(),
-	}, nil
-}

@@ -23,7 +23,7 @@ type geminiProvider struct {
 }
 
 // NewGemini returns a Google Gemini provider.
-// The returned provider implements both Provider and TokenStreamer.
+// The returned provider implements Provider with streaming support.
 func NewGemini(cfg GeminiConfig) Provider {
 	return &geminiProvider{
 		cfg:    cfg,
@@ -109,7 +109,7 @@ func (p *geminiProvider) buildGeminiBody(messages []Message, opt CompletionOptio
 	return json.Marshal(reqMap)
 }
 
-// CompleteStream implements TokenStreamer using the Gemini streaming endpoint.
+// CompleteStream implements Provider using the Gemini streaming endpoint.
 func (p *geminiProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	body, err := p.buildGeminiBody(messages, opt)
 	if err != nil {

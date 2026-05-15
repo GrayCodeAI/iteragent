@@ -1,9 +1,7 @@
 package iteragent
 
 import (
-	"context"
 	"encoding/json"
-	"sync"
 	"time"
 )
 
@@ -304,76 +302,6 @@ type ToolDefinition struct {
 	Schema json.RawMessage
 }
 
-type StreamConfig struct {
-	Model         string
-	APIKey        string
-	BaseURL       string
-	Headers       map[string]string
-	MaxTokens     int
-	Temperature   float32
-	ThinkingLevel ThinkingLevel
-	Stream        bool
-	APIVersion    string
-}
-
-type ModelConfig struct {
-	Model                string
-	BaseURL              string
-	APIKey               string
-	Headers              map[string]string
-	MaxTokens            int
-	Temperature          float32
-	ThinkingLevel        ThinkingLevel
-	ExtraBody            map[string]interface{}
-	AuthStyle            string
-	SupportsThinking     bool
-	SupportsCacheControl bool
-	ReasoningFormat      string
-}
-
-func DefaultModelConfig() ModelConfig {
-	return ModelConfig{
-		MaxTokens:     4096,
-		Temperature:   0.7,
-		ThinkingLevel: ThinkingLevelOff,
-		AuthStyle:     "basic",
-	}
-}
-
-type ApiProtocol string
-
-const (
-	ProtocolAnthropic       ApiProtocol = "anthropic"
-	ProtocolOpenAI          ApiProtocol = "openai"
-	ProtocolOpenAICompat    ApiProtocol = "openai_compat"
-	ProtocolOpenAIResponses ApiProtocol = "openai_responses"
-	ProtocolAzureOpenAI     ApiProtocol = "azure_openai"
-	ProtocolGoogle          ApiProtocol = "google"
-	ProtocolGoogleVertex    ApiProtocol = "google_vertex"
-	ProtocolBedrock         ApiProtocol = "bedrock"
-)
-
-type StreamEventType string
-
-const (
-	StreamEventContent      StreamEventType = "content"
-	StreamEventContentBlock StreamEventType = "content_block"
-	StreamEventContentStart StreamEventType = "content_block_start"
-	StreamEventContentStop  StreamEventType = "content_block_stop"
-	StreamEventMessageStart StreamEventType = "message_start"
-	StreamEventMessageDelta StreamEventType = "message_delta"
-	StreamEventMessageStop  StreamEventType = "message_stop"
-	StreamEventError        StreamEventType = "error"
-	StreamEventPing         StreamEventType = "ping"
-)
-
-type StreamEvent struct {
-	Type    StreamEventType
-	Index   int
-	Content string
-	Error   string
-}
-
 type ProviderError struct {
 	Code    string
 	Message string
@@ -384,47 +312,3 @@ func (e *ProviderError) Error() string {
 	return e.Message
 }
 
-type ProviderRegistry struct {
-	mu        sync.RWMutex
-	providers map[ApiProtocol]StreamProvider
-}
-
-func NewProviderRegistry() *ProviderRegistry {
-	return &ProviderRegistry{
-		providers: make(map[ApiProtocol]StreamProvider),
-	}
-}
-
-func (r *ProviderRegistry) Register(protocol ApiProtocol, provider StreamProvider) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.providers[protocol] = provider
-}
-
-func (r *ProviderRegistry) Get(protocol ApiProtocol) (StreamProvider, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	p, ok := r.providers[protocol]
-	return p, ok
-}
-
-func (r *ProviderRegistry) Has(protocol ApiProtocol) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.providers[protocol]
-	return ok
-}
-
-func (r *ProviderRegistry) Protocols() []ApiProtocol {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	protocols := make([]ApiProtocol, 0, len(r.providers))
-	for p := range r.providers {
-		protocols = append(protocols, p)
-	}
-	return protocols
-}
-
-type StreamProvider interface {
-	Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error)
-}

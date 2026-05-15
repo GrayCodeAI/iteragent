@@ -23,11 +23,38 @@ var (
 
 func init() {
 	patterns := []string{
+		// Recursive force remove
 		`\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\b`,
+		// Dangerous chmod
 		`\bchmod\s+-R\s+777\b`,
+		// Write to system paths
 		`>\s*/etc/`,
+		// Pipe to shell from network
 		`\bcurl\b.*\|\s*(ba)?sh\b`,
 		`\bwget\b.*\|\s*(ba)?sh\b`,
+		// Fork bombs and process abuse
+		`:(){ :\|:& };:`,
+		`\bmkfs\b`,
+		`\bdd\b.*of=/dev/`,
+		// Destructive redirects
+		`>\s*/dev/sd`,
+		`>\s*/dev/nvme`,
+		// Privilege escalation
+		`\bsudo\s+rm\b`,
+		`\bsudo\s+chmod\b.*777`,
+		// Network exfiltration
+		`\bnc\s+-[el]`,
+		`\bncat\b.*-e`,
+		`\bsocat\b.*exec`,
+		// Environment variable leakage to network
+		`\benv\b.*\|\s*(nc|curl|wget)`,
+		`\bprintenv\b.*\|\s*(nc|curl|wget)`,
+		// Dangerous git operations
+		`\bgit\s+push\s+.*--force\b.*\bmain\b`,
+		`\bgit\s+push\s+.*--force\b.*\bmaster\b`,
+		`\bgit\s+clean\s+-[a-zA-Z]*f[a-zA-Z]*d\b`,
+		// Shellshock-style
+		`\(\)\s*\{.*\bexport\b`,
 	}
 	for _, p := range patterns {
 		re, err := regexp.Compile(p)
@@ -89,7 +116,19 @@ func safeJoin(repoPath, rel string) (string, error) {
 	if !strings.HasPrefix(absJoined, absRepo) {
 		return "", fmt.Errorf("path %q is outside the repository", rel)
 	}
-	return absJoined, nil
+	// Resolve symlinks to prevent symlink-based path traversal.
+	resolved, err := filepath.EvalSymlinks(absJoined)
+	if err != nil {
+		// File may not exist yet (for write operations) — that's OK.
+		if os.IsNotExist(err) {
+			return absJoined, nil
+		}
+		return "", fmt.Errorf("resolve symlink: %w", err)
+	}
+	if !strings.HasPrefix(resolved, absRepo) {
+		return "", fmt.Errorf("path %q resolves outside the repository via symlink", rel)
+	}
+	return resolved, nil
 }
 
 // DefaultTools returns all built-in tools available to the agent.
@@ -217,6 +256,7 @@ func EditFileTool(repoPath string) Tool {
 		Name:        "list_files",
 		Description: "List all files in the repo.\nArgs: {}",
 		Execute: func(ctx context.Context, args map[string]string) (string, error) {
+			const maxFiles = 1000
 			var files []string
 			var walkErr error
 			err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
@@ -229,12 +269,19 @@ func EditFileTool(repoPath string) Tool {
 				}
 				rel, _ := filepath.Rel(repoPath, path)
 				files = append(files, rel)
+				if len(files) >= maxFiles {
+					return filepath.SkipAll
+				}
 				return nil
 			})
-			if err != nil {
+			if err != nil && err != filepath.SkipAll {
 				return strings.Join(files, "\n"), err
 			}
-			return strings.Join(files, "\n"), walkErr
+			result := strings.Join(files, "\n")
+			if len(files) >= maxFiles {
+				result += fmt.Sprintf("\n\n[truncated: showing first %d files]", maxFiles)
+			}
+			return result, walkErr
 		},
 	}
 }
@@ -256,6 +303,9 @@ func SearchTool(repoPath string) Tool {
 					return "", err
 				}
 			}
+
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 
 			c := exec.CommandContext(ctx, "grep", "-r", "-n", "--", pattern, path)
 			c.Dir = repoPath
@@ -299,7 +349,23 @@ func GitDiffTool(repoPath string) Tool {
 				msg = fmt.Sprintf("iterate: auto-improvement session %s", time.Now().Format("2006-01-02"))
 			}
 
-			add := exec.CommandContext(ctx, "git", "add", "-A")
+			// Stage only tracked/changed files, not everything.
+			diffFiles := exec.CommandContext(ctx, "git", "diff", "--name-only", "--diff-filter=ACMR")
+			diffFiles.Dir = repoPath
+			diffOut, _ := diffFiles.CombinedOutput()
+
+			untracked := exec.CommandContext(ctx, "git", "ls-files", "--others", "--exclude-standard")
+			untracked.Dir = repoPath
+			untrackedOut, _ := untracked.CombinedOutput()
+
+			allFiles := strings.TrimSpace(string(diffOut) + "\n" + string(untrackedOut))
+			if allFiles == "" {
+				return "nothing to commit", nil
+			}
+
+			fileList := strings.Split(allFiles, "\n")
+			addArgs := append([]string{"add", "--"}, fileList...)
+			add := exec.CommandContext(ctx, "git", addArgs...)
 			add.Dir = repoPath
 			if out, err := add.CombinedOutput(); err != nil {
 				return string(out), fmt.Errorf("git add: %w", err)

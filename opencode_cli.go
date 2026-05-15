@@ -43,7 +43,7 @@ type opencodeEvent struct {
 	} `json:"part"`
 }
 
-// CompleteStream implements TokenStreamer by spawning OpenCode CLI and parsing JSON output.
+// CompleteStream implements Provider by spawning OpenCode CLI and parsing JSON output.
 func (p *opencodeCLIProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	// Build the prompt from messages
 	var prompt strings.Builder
@@ -156,6 +156,16 @@ func (p *opencodeCLIProvider) runOpenCode(ctx context.Context, prompt string, on
 
 // OpenCodeCLIServer wraps the OpenCode CLI in a long-running server mode
 // for better performance (avoids CLI startup overhead on each call).
+//
+// TODO: This is currently a stub. The "opencode serve" mode is not yet available
+// upstream. When it becomes available, this should:
+//   - Start the opencode process in serve/daemon mode with stdin/stdout pipes
+//   - Send JSON-RPC or line-delimited requests over stdin
+//   - Read responses from stdout using the scanner
+//   - Implement Complete/CompleteStream by sending requests to the running process
+//
+// For now, callers should use NewOpenCodeCLI (which spawns a fresh process per call)
+// or use NewOpenAICompat with an appropriate base URL if a REST API is available.
 type OpenCodeCLIServer struct {
 	model   string
 	cmd     *exec.Cmd

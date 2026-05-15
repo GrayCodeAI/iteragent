@@ -1,3 +1,15 @@
+// Package iteragent - NVIDIA provider.
+//
+// NOTE: This provider is structurally identical to OpenAICompat (openaicompat.go).
+// It could be replaced entirely by:
+//
+//	NewOpenAICompat(OpenAICompatConfig{
+//	    BaseURL: "https://integrate.api.nvidia.com/v1",
+//	    APIKey:  apiKey,
+//	    Model:   model,
+//	})
+//
+// Kept as a standalone file for backward compatibility and explicit NVIDIA support.
 package iteragent
 
 import (
@@ -92,7 +104,7 @@ func (p *nvidiaProvider) Complete(ctx context.Context, messages []Message, opts 
 	return parsed.Choices[0].Message.Content, nil
 }
 
-// CompleteStream implements TokenStreamer for Nvidia using the OpenAI-compatible SSE endpoint.
+// CompleteStream implements Provider for Nvidia using the OpenAI-compatible SSE endpoint.
 func (p *nvidiaProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	url := p.cfg.BaseURL
 	if url == "" {

@@ -310,12 +310,12 @@ func TestAgentHooks_BeforeTurnReceivesMessages(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TokenStreamer tests
+// Streaming tests
 // ---------------------------------------------------------------------------
 
-// TestAgentTokenStreamer_EventsEmitted verifies that EventTokenUpdate events
-// are emitted when the provider implements TokenStreamer.
-func TestAgentTokenStreamer_EventsEmitted(t *testing.T) {
+// TestAgentStreaming_EventsEmitted verifies that EventTokenUpdate events
+// are emitted during streaming completions.
+func TestAgentStreaming_EventsEmitted(t *testing.T) {
 	p := iteragent.NewMockStream("hello world")
 	a := iteragent.New(p, nil, testLogger())
 
@@ -338,9 +338,9 @@ func TestAgentTokenStreamer_EventsEmitted(t *testing.T) {
 	}
 }
 
-// TestAgentTokenStreamer_RunReturnsFullResponse verifies Run() returns the
+// TestAgentStreaming_RunReturnsFullResponse verifies Run() returns the
 // complete response even when token streaming is active.
-func TestAgentTokenStreamer_RunReturnsFullResponse(t *testing.T) {
+func TestAgentStreaming_RunReturnsFullResponse(t *testing.T) {
 	p := iteragent.NewMockStream("the quick brown fox")
 	a := iteragent.New(p, nil, testLogger())
 
@@ -353,10 +353,10 @@ func TestAgentTokenStreamer_RunReturnsFullResponse(t *testing.T) {
 	}
 }
 
-// TestAgentTokenStreamer_WithTools verifies streaming still works when a tool
+// TestAgentStreaming_WithTools verifies streaming still works when a tool
 // call precedes the final response. The mock streams every turn, so we verify
 // that EventTokenUpdate events were emitted and the final answer is correct.
-func TestAgentTokenStreamer_WithTools(t *testing.T) {
+func TestAgentStreaming_WithTools(t *testing.T) {
 	toolCall := iteragent.ToolCall{Tool: "noop", Args: map[string]string{}}
 	noopTool := iteragent.Tool{
 		Name: "noop",
@@ -386,21 +386,6 @@ func TestAgentTokenStreamer_WithTools(t *testing.T) {
 	if finalContent != "streamed answer" {
 		t.Errorf("final content = %q, want %q", finalContent, "streamed answer")
 	}
-}
-
-// TestAgentTokenStreamer_NonStreamingProviderNoTokenEvents verifies that a
-// plain Provider (no TokenStreamer) emits NO EventTokenUpdate events.
-func TestAgentTokenStreamer_NonStreamingProviderNoTokenEvents(t *testing.T) {
-	p := iteragent.NewMock("plain response") // does not implement TokenStreamer
-	a := iteragent.New(p, nil, testLogger())
-
-	events := a.Prompt(context.Background(), "hello")
-	for e := range events {
-		if iteragent.EventType(e.Type) == iteragent.EventTokenUpdate {
-			t.Errorf("unexpected EventTokenUpdate from non-streaming provider: %q", e.Content)
-		}
-	}
-	a.Finish()
 }
 
 // TestAgentClose verifies that Close() is safe to call on an agent with no MCP
@@ -545,7 +530,7 @@ func TestPromptMessages_Hooks_OnToolStartEnd(t *testing.T) {
 }
 
 // TestPromptMessages_Hooks_TokenUpdate verifies EventTokenUpdate events are emitted
-// via PromptMessages when the provider implements TokenStreamer.
+// via PromptMessages during streaming completions.
 func TestPromptMessages_Hooks_TokenUpdate(t *testing.T) {
 	const want = "streamed via prompt messages"
 	p := iteragent.NewMockStream(want)
@@ -572,7 +557,7 @@ func TestPromptMessages_Hooks_TokenUpdate(t *testing.T) {
 }
 
 // TestSubAgentStreaming verifies that SubAgent.Run delegates to the embedded Agent,
-// which means TokenStreamer and EventTokenUpdate both flow through correctly after the refactor.
+// which means streaming and EventTokenUpdate both flow through correctly.
 func TestSubAgentStreaming(t *testing.T) {
 	const want = "subagent streamed answer"
 	p := iteragent.NewMockStream(want)
@@ -656,6 +641,9 @@ func (p *blockingProvider) Name() string { return "blocking" }
 func (p *blockingProvider) Complete(ctx context.Context, messages []iteragent.Message, opts ...iteragent.CompletionOptions) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
+}
+func (p *blockingProvider) CompleteStream(ctx context.Context, messages []iteragent.Message, opts iteragent.CompletionOptions, onToken func(string)) (string, error) {
+	return p.Complete(ctx, messages, opts)
 }
 
 // ---------------------------------------------------------------------------

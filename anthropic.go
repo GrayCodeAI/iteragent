@@ -23,7 +23,7 @@ type anthropicProvider struct {
 }
 
 // NewAnthropic returns a native Anthropic provider.
-// The returned provider implements both Provider and TokenStreamer.
+// The returned provider implements Provider with streaming support.
 func NewAnthropic(cfg AnthropicConfig) Provider {
 	return &anthropicProvider{
 		cfg:    cfg,
@@ -102,7 +102,7 @@ func (p *anthropicProvider) buildAnthropicBody(messages []Message, opt Completio
 	return json.Marshal(reqMap)
 }
 
-// CompleteStream implements TokenStreamer. It uses SSE to deliver tokens
+// CompleteStream implements Provider. It uses SSE to deliver tokens
 // incrementally via onToken as they arrive from the Anthropic API.
 func (p *anthropicProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	body, err := p.buildAnthropicBody(messages, opt, true)

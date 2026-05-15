@@ -55,27 +55,27 @@ func (p *MockProvider) Complete(ctx context.Context, messages []Message, opts ..
 	return p.response, nil
 }
 
-func (p *MockProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
-	if p.error != nil {
-		return Message{}, p.error
+// CompleteStream implements Provider. It calls onToken once per word of the
+// response so tests can observe incremental delivery.
+func (p *MockProvider) CompleteStream(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(token string)) (string, error) {
+	full, err := p.Complete(ctx, messages, opts)
+	if err != nil || onToken == nil {
+		return full, err
 	}
-
-	for _, char := range p.response {
+	words := strings.Split(full, " ")
+	for i, w := range words {
 		select {
 		case <-ctx.Done():
-			return Message{}, ctx.Err()
+			return full, ctx.Err()
 		default:
 		}
-		onEvent(StreamEvent{
-			Type:    StreamEventContent,
-			Content: string(char),
-		})
+		if i < len(words)-1 {
+			onToken(w + " ")
+		} else {
+			onToken(w)
+		}
 	}
-
-	return Message{
-		Role:    "assistant",
-		Content: p.response,
-	}, nil
+	return full, nil
 }
 
 func mustJson(v interface{}) string {
@@ -127,84 +127,16 @@ func (b *MockProviderBuilder) Build() Provider {
 	return b.mock
 }
 
-// MockTokenStreamer is a Provider that also implements TokenStreamer.
-// It delivers the response word-by-word via onToken so that EventTokenUpdate
-// events are emitted during agent.Run / agent.PromptMessages calls.
-type MockTokenStreamer struct {
-	MockProvider
+// NewMockStream returns a mock provider with streaming support.
+func NewMockStream(response string) *MockProvider {
+	return &MockProvider{model: "mock-stream", response: response}
 }
 
-// NewMockStream returns a mock that implements both Provider and TokenStreamer.
-func NewMockStream(response string) *MockTokenStreamer {
-	return &MockTokenStreamer{
-		MockProvider: MockProvider{model: "mock-stream", response: response},
+// NewMockStreamWithTools returns a mock provider with streaming and tool calls.
+func NewMockStreamWithTools(response string, toolCalls []ToolCall) *MockProvider {
+	return &MockProvider{
+		model:     "mock-stream",
+		response:  response,
+		toolCalls: toolCalls,
 	}
-}
-
-// NewMockStreamWithTools returns a streaming mock that fires tool calls first,
-// then delivers the final response token-by-token.
-func NewMockStreamWithTools(response string, toolCalls []ToolCall) *MockTokenStreamer {
-	return &MockTokenStreamer{
-		MockProvider: MockProvider{
-			model:     "mock-stream",
-			response:  response,
-			toolCalls: toolCalls,
-		},
-	}
-}
-
-// CompleteStream implements TokenStreamer. It calls onToken once per word of
-// the response so tests can observe incremental delivery.
-func (p *MockTokenStreamer) CompleteStream(ctx context.Context, messages []Message, opts CompletionOptions, onToken func(string)) (string, error) {
-	full, err := p.Complete(ctx, messages, opts)
-	if err != nil || onToken == nil {
-		return full, err
-	}
-	// Emit word by word so callers receive multiple EventTokenUpdate events.
-	words := strings.Split(full, " ")
-	for i, w := range words {
-		select {
-		case <-ctx.Done():
-			return full, ctx.Err()
-		default:
-		}
-		if i < len(words)-1 {
-			onToken(w + " ")
-		} else {
-			onToken(w)
-		}
-	}
-	return full, nil
-}
-
-type MockStreamProvider struct {
-	events []StreamEvent
-	index  int
-}
-
-func NewMockStreamProvider(events []StreamEvent) *MockStreamProvider {
-	return &MockStreamProvider{
-		events: events,
-	}
-}
-
-func (p *MockStreamProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
-	var content strings.Builder
-
-	for _, event := range p.events {
-		select {
-		case <-ctx.Done():
-			return Message{}, ctx.Err()
-		default:
-		}
-		onEvent(event)
-		if event.Content != "" {
-			content.WriteString(event.Content)
-		}
-	}
-
-	return Message{
-		Role:    "assistant",
-		Content: content.String(),
-	}, nil
 }

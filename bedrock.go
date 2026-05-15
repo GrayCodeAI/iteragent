@@ -123,7 +123,7 @@ func (p *BedrockProvider) Complete(ctx context.Context, messages []Message, opts
 	return response.Output.Message.Content[0].Text, nil
 }
 
-// CompleteStream implements TokenStreamer for Bedrock. Bedrock's streaming API uses
+// CompleteStream implements Provider for Bedrock. Bedrock's streaming API uses
 // HTTP/2 binary event framing which requires the AWS SDK to decode correctly.
 // As a pragmatic fallback, this calls Complete and delivers the full response as
 // a single token so the agent loop still benefits from retry logic.
@@ -138,84 +138,6 @@ func (p *BedrockProvider) CompleteStream(ctx context.Context, messages []Message
 	return result, nil
 }
 
-func (p *BedrockProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
-	url := fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse",
-		p.config.Region, p.config.Model)
-
-	systemPrompts := []map[string]string{}
-	var convMessages []map[string]interface{}
-
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			systemPrompts = append(systemPrompts, map[string]string{"text": msg.Content})
-		} else {
-			convMessages = append(convMessages, map[string]interface{}{
-				"role": msg.Role,
-				"content": []map[string]string{
-					{"text": msg.Content},
-				},
-			})
-		}
-	}
-
-	body := map[string]interface{}{
-		"messages": convMessages,
-		"stream":   true,
-	}
-	if len(systemPrompts) > 0 {
-		body["system"] = systemPrompts
-	}
-	if config.MaxTokens > 0 {
-		body["maxTokens"] = config.MaxTokens
-	}
-	if config.Temperature > 0 {
-		body["temperature"] = config.Temperature
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return Message{}, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return Message{}, err
-	}
-
-	p.signRequest(req, string(jsonBody))
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return Message{}, err
-	}
-	defer resp.Body.Close()
-
-	var content strings.Builder
-
-	decoder := NewSSEDecoder(resp.Body)
-	for {
-		event, err := decoder.Decode()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-
-		if event.Type == "content" {
-			content.WriteString(event.Content)
-			onEvent(event)
-		}
-	}
-
-	return Message{
-		Role:    "assistant",
-		Content: content.String(),
-	}, nil
-}
 
 func (p *BedrockProvider) signRequest(req *http.Request, payload string) {
 	now := time.Now().UTC()

@@ -19,7 +19,7 @@ import (
 // ErrUnknownTool is returned when a tool call references a tool that is not registered.
 var ErrUnknownTool = errors.New("unknown tool")
 
-const maxAgentIterations = 20
+const defaultMaxAgentIterations = 20
 
 // ToolCall represents a tool invocation.
 type ToolCall struct {
@@ -73,6 +73,9 @@ type Agent struct {
 	Temperature   float32
 	Skills        []Skill
 	Messages      []Message
+
+	// MaxIterations overrides the default iteration limit when set to > 0.
+	MaxIterations int
 
 	// Context compaction config.
 	contextConfig ContextConfig
@@ -361,7 +364,12 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 
 	opts := a.completionOpts()
 
-	for i := 0; i < maxAgentIterations; i++ {
+	maxIter := defaultMaxAgentIterations
+	if a.MaxIterations > 0 {
+		maxIter = a.MaxIterations
+	}
+
+	for i := 0; i < maxIter; i++ {
 		a.logger.Info("agent iteration", "step", i+1)
 		emit(Event{Type: string(EventTurnStart), Content: fmt.Sprintf("turn %d", i+1)})
 
@@ -376,17 +384,11 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 			response string
 			err      error
 		)
-		if ts, ok := a.provider.(TokenStreamer); ok {
-			response, err = RetryWithResult(ctx, DefaultRetryConfig, func() (string, error) {
-				return ts.CompleteStream(ctx, messages, opts, func(token string) {
-					emit(Event{Type: string(EventTokenUpdate), Content: token})
-				})
+		response, err = RetryWithResult(ctx, DefaultRetryConfig, func() (string, error) {
+			return a.provider.CompleteStream(ctx, messages, opts, func(token string) {
+				emit(Event{Type: string(EventTokenUpdate), Content: token})
 			})
-		} else {
-			response, err = RetryWithResult(ctx, DefaultRetryConfig, func() (string, error) {
-				return a.provider.Complete(ctx, messages, opts)
-			})
-		}
+		})
 		if err != nil {
 			emit(Event{Type: string(EventError), Content: err.Error(), IsError: true})
 			return "", fmt.Errorf("provider error at step %d: %w", i+1, err)
@@ -419,7 +421,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userMessage string, emitF
 		emit(Event{Type: string(EventTurnEnd), Content: ""})
 	}
 
-	return "", fmt.Errorf("agent exceeded max iterations (%d)", maxAgentIterations)
+	return "", fmt.Errorf("agent exceeded max iterations (%d)", maxIter)
 }
 
 func (a *Agent) emit(e Event) {
@@ -846,7 +848,12 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 
 		opts := a.completionOpts()
 
-		for i := 0; i < maxAgentIterations; i++ {
+		maxIter := defaultMaxAgentIterations
+		if a.MaxIterations > 0 {
+			maxIter = a.MaxIterations
+		}
+
+		for i := 0; i < maxIter; i++ {
 			// Check for cancellation before each turn.
 			select {
 			case <-loopCtx.Done():
@@ -868,17 +875,11 @@ func (a *Agent) PromptMessages(ctx context.Context, messages []Message) chan Eve
 				response string
 				turnErr  error
 			)
-			if ts, ok := a.provider.(TokenStreamer); ok {
-				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
-					return ts.CompleteStream(loopCtx, fullMessages, opts, func(token string) {
-						emitFn(Event{Type: string(EventTokenUpdate), Content: token})
-					})
+			response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
+				return a.provider.CompleteStream(loopCtx, fullMessages, opts, func(token string) {
+					emitFn(Event{Type: string(EventTokenUpdate), Content: token})
 				})
-			} else {
-				response, turnErr = RetryWithResult(loopCtx, DefaultRetryConfig, func() (string, error) {
-					return a.provider.Complete(loopCtx, fullMessages, opts)
-				})
-			}
+			})
 			if turnErr != nil {
 				emitFn(Event{Type: string(EventError), Content: turnErr.Error(), IsError: true})
 				break

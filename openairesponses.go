@@ -145,7 +145,7 @@ func (p *OpenAIResponsesProvider) Complete(ctx context.Context, messages []Messa
 	return result.String(), nil
 }
 
-// CompleteStream implements TokenStreamer for the OpenAI Responses API.
+// CompleteStream implements Provider for the OpenAI Responses API.
 // It uses the response.content_part.delta SSE event to deliver text tokens incrementally.
 func (p *OpenAIResponsesProvider) CompleteStream(ctx context.Context, messages []Message, opt CompletionOptions, onToken func(string)) (string, error) {
 	baseURL := p.config.BaseURL
@@ -190,70 +190,3 @@ func (p *OpenAIResponsesProvider) CompleteStream(ctx context.Context, messages [
 	return full.String(), nil
 }
 
-func (p *OpenAIResponsesProvider) Stream(ctx context.Context, config StreamConfig, messages []Message, onEvent func(StreamEvent)) (Message, error) {
-	baseURL := p.config.BaseURL
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
-
-	url := baseURL + "/responses"
-
-	body := responsesRequest{
-		Model:       p.config.Model,
-		Input:       messagesToResponsesFormat(messages),
-		MaxTokens:   config.MaxTokens,
-		Temperature: config.Temperature,
-		Store:       false,
-	}
-
-	jsonBody, err := json.Marshal(body)
-	if err != nil {
-		return Message{}, fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return Message{}, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.config.APIKey)
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return Message{}, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body) // best-effort for error message
-		return Message{}, fmt.Errorf("OpenAI Responses API error (%d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var content strings.Builder
-	decoder := NewSSEDecoder(resp.Body)
-
-	for {
-		event, err := decoder.Decode()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-
-		if event.Type == "content" || event.Type == "content_block" {
-			content.WriteString(event.Content)
-			onEvent(StreamEvent{
-				Type:    StreamEventContent,
-				Content: event.Content,
-			})
-		}
-	}
-
-	return Message{
-		Role:    "assistant",
-		Content: content.String(),
-	}, nil
-}

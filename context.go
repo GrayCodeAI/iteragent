@@ -7,13 +7,31 @@ import (
 	"time"
 )
 
-const charsPerToken = 4
-
+// EstimateTokens estimates token count using a weighted heuristic.
+// Code content tends to have more tokens per character than prose due to
+// symbols, keywords, and whitespace. This uses ~3.5 chars/token as a
+// middle ground between prose (4) and dense code (2.5).
 func EstimateTokens(text string) int {
 	if len(text) == 0 {
 		return 0
 	}
-	return (len(text) + charsPerToken - 1) / charsPerToken
+	// Count code-heavy characters (braces, parens, operators, newlines).
+	codeChars := 0
+	for _, r := range text {
+		switch r {
+		case '{', '}', '(', ')', '[', ']', ';', ':', '=', '<', '>', '!',
+			'+', '-', '*', '/', '%', '&', '|', '^', '~', '\n', '\t':
+			codeChars++
+		}
+	}
+	codeRatio := float64(codeChars) / float64(len(text))
+	// Adjust chars-per-token based on code density.
+	// High code density (>10%) -> 3.0 chars/token, low density -> 4.0 chars/token.
+	cpt := 4.0 - codeRatio*10.0
+	if cpt < 2.5 {
+		cpt = 2.5
+	}
+	return int(float64(len(text)) / cpt)
 }
 
 func EstimateMessageTokens(msg Message) int {

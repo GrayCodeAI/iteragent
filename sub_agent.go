@@ -54,11 +54,11 @@ func (s *SubAgent) WithMaxTurns(n int) *SubAgent {
 }
 
 // Run executes the sub-agent on the given task. It delegates to the embedded
-// Agent so that TokenStreamer, hooks, and context compaction all apply.
+// Agent so that streaming, hooks, and context compaction all apply.
 // If MaxTurns is set (>0), it overrides the default iteration limit.
 func (s *SubAgent) Run(ctx context.Context, task string) (string, error) {
 	if s.MaxTurns > 0 {
-		return s.Agent.Run(ctx, s.SystemPrompt, task)
+		s.Agent.MaxIterations = s.MaxTurns
 	}
 	return s.Agent.Run(ctx, s.SystemPrompt, task)
 }
